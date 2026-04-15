@@ -2,6 +2,11 @@ import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
 import { errorMiddleware } from '@vera/core';
+import {
+  expirePendingTransactions,
+  purgeExpiredRegistrationChallenges,
+  startSweeper,
+} from '@vera/retention';
 import { getPayConfig } from './env.js';
 import authRouter from './routes/auth.routes.js';
 import transactionsRouter from './routes/transactions.routes.js';
@@ -28,6 +33,19 @@ app.use('/api/transactions', transactionsRouter);
 app.use('/api/payment', paymentRouter);
 
 app.use(errorMiddleware);
+
+// PCI-DSS 3.1.  The read-path in transaction.service.ts also expires on
+// access; this bulk sweep catches txns that are never observed again.
+startSweeper({
+  name: 'registration-challenges',
+  intervalMs: 60_000,
+  run: purgeExpiredRegistrationChallenges,
+});
+startSweeper({
+  name: 'pending-transactions',
+  intervalMs: 30_000,
+  run: expirePendingTransactions,
+});
 
 app.listen(config.PORT, () => {
   // eslint-disable-next-line no-console

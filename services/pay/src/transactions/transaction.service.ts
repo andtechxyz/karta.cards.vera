@@ -4,6 +4,7 @@ import { CardStatus, TransactionStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@vera/db';
 import { badRequest, gone, notFound } from '@vera/core';
+import { TRANSACTION_TTL_ELAPSED_REASON } from '@vera/retention';
 import { normaliseCurrency, resolveRulesFromProgram } from '@vera/programs';
 import { evaluateTierRules } from './tier.js';
 import { assertTransition } from './state-machine.js';
@@ -69,9 +70,17 @@ export async function getTransactionByRlid(rlid: string) {
   const txn = await prisma.transaction.findUnique({ where: { rlid } });
   if (!txn) throw notFound('transaction_not_found', 'Transaction not found');
   if (txn.status === TransactionStatus.PENDING && txn.expiresAt < new Date()) {
-    return updateStatus(txn.id, TransactionStatus.EXPIRED, {
-      failureReason: 'transaction_ttl_elapsed',
+    // Race-safe against the retention sweep: if the bulk expire already ran,
+    // updateMany affects 0 rows and we fall through to re-read the row as
+    // EXPIRED rather than throwing on an EXPIRED→EXPIRED self-transition.
+    await prisma.transaction.updateMany({
+      where: { id: txn.id, status: TransactionStatus.PENDING },
+      data: {
+        status: TransactionStatus.EXPIRED,
+        failureReason: TRANSACTION_TTL_ELAPSED_REASON,
+      },
     });
+    return prisma.transaction.findUniqueOrThrow({ where: { id: txn.id } });
   }
   return txn;
 }

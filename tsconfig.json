@@ -8,6 +8,7 @@
     { "path": "./packages/vault-client" },
     { "path": "./packages/programs" },
     { "path": "./packages/service-auth" },
+    { "path": "./packages/retention" },
     { "path": "./services/tap" },
     { "path": "./services/activation" },
     { "path": "./services/pay" },

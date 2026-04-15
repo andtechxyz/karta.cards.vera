@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import { errorMiddleware } from '@vera/core';
 import { captureRawBody, requireSignedRequest } from '@vera/service-auth';
+import { purgeExpiredRetrievalTokens, startSweeper } from '@vera/retention';
 import { getVaultConfig } from './env.js';
 import { startAuditSubscriber } from './vault/index.js';
 import storeRouter from './routes/store.routes.js';
@@ -42,6 +43,14 @@ app.use('/api/vault', vaultRouter);
 app.use(errorMiddleware);
 
 startAuditSubscriber();
+
+// PCI-DSS 3.1: RetrievalToken TTL isn't DB-enforced.  Sweep cadence matches
+// the TTL, so worst-case a consumed/expired token lingers ~2×TTL.
+startSweeper({
+  name: 'retrieval-tokens',
+  intervalMs: 60_000,
+  run: purgeExpiredRetrievalTokens,
+});
 
 app.listen(config.PORT, () => {
   // eslint-disable-next-line no-console

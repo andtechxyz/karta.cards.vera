@@ -19,6 +19,7 @@ vi.mock('@vera/db', async (importActual) => {
         findUniqueOrThrow: vi.fn(),
         findMany: vi.fn(),
         update: vi.fn(),
+        updateMany: vi.fn(),
       },
     },
   };
@@ -50,6 +51,8 @@ const txnCreate = () =>
   prisma.transaction.create as unknown as Mocked<typeof prisma.transaction.create>;
 const txnUpdate = () =>
   prisma.transaction.update as unknown as Mocked<typeof prisma.transaction.update>;
+const txnUpdateMany = () =>
+  prisma.transaction.updateMany as unknown as Mocked<typeof prisma.transaction.updateMany>;
 const cardFindUnique = () =>
   prisma.card.findUnique as unknown as Mocked<typeof prisma.card.findUnique>;
 const cardUpdate = () =>
@@ -64,6 +67,7 @@ beforeEach(() => {
     return { id: 'txn_new', ...typed.data } as never;
   });
   vi.mocked(txnUpdate()).mockReset();
+  vi.mocked(txnUpdateMany()).mockReset().mockResolvedValue({ count: 1 } as never);
   vi.mocked(cardFindUnique()).mockReset();
   vi.mocked(cardUpdate()).mockReset();
 });
@@ -226,22 +230,37 @@ describe('getTransactionByRlid', () => {
       status: TransactionStatus.PENDING,
       expiresAt: new Date(Date.now() - 1000),
     } as never);
-    // updateStatus calls findUniqueOrThrow first, then update — stub both.
     vi.mocked(txnFindUniqueOrThrow()).mockResolvedValue({
-      id: 'txn_1',
-      status: TransactionStatus.PENDING,
-    } as never);
-    vi.mocked(txnUpdate()).mockResolvedValue({
       id: 'txn_1',
       status: TransactionStatus.EXPIRED,
     } as never);
 
     const out = await getTransactionByRlid('rl_1');
     expect(out.status).toBe(TransactionStatus.EXPIRED);
-    expect(txnUpdate()).toHaveBeenCalledOnce();
-    const updateData = vi.mocked(txnUpdate()).mock.calls[0]![0]!.data as Record<string, unknown>;
-    expect(updateData.status).toBe(TransactionStatus.EXPIRED);
-    expect(updateData.failureReason).toBe('transaction_ttl_elapsed');
+    expect(txnUpdateMany()).toHaveBeenCalledOnce();
+    const call = vi.mocked(txnUpdateMany()).mock.calls[0]![0]!;
+    expect(call.where).toEqual({ id: 'txn_1', status: TransactionStatus.PENDING });
+    const data = call.data as Record<string, unknown>;
+    expect(data.status).toBe(TransactionStatus.EXPIRED);
+    expect(data.failureReason).toBe('transaction_ttl_elapsed');
+  });
+
+  it('is race-safe against the bulk sweep — a count=0 updateMany just re-reads', async () => {
+    vi.mocked(txnFindUnique()).mockResolvedValue({
+      id: 'txn_1',
+      rlid: 'rl_1',
+      status: TransactionStatus.PENDING,
+      expiresAt: new Date(Date.now() - 1000),
+    } as never);
+    // Sweep won: updateMany affected 0 rows because the status is already EXPIRED.
+    vi.mocked(txnUpdateMany()).mockResolvedValue({ count: 0 } as never);
+    vi.mocked(txnFindUniqueOrThrow()).mockResolvedValue({
+      id: 'txn_1',
+      status: TransactionStatus.EXPIRED,
+    } as never);
+
+    const out = await getTransactionByRlid('rl_1');
+    expect(out.status).toBe(TransactionStatus.EXPIRED);
   });
 
   it('does NOT transition non-PENDING rows past TTL (e.g. already COMPLETED)', async () => {
@@ -349,10 +368,6 @@ describe('getTransactionForAuthOrThrow', () => {
       expiresAt: new Date(Date.now() - 1000),
     } as never);
     vi.mocked(txnFindUniqueOrThrow()).mockResolvedValue({
-      id: 'txn_1',
-      status: TransactionStatus.PENDING,
-    } as never);
-    vi.mocked(txnUpdate()).mockResolvedValue({
       id: 'txn_1',
       status: TransactionStatus.EXPIRED,
     } as never);

@@ -9,6 +9,7 @@
   "references": [
     { "path": "../../packages/core" },
     { "path": "../../packages/db" },
+    { "path": "../../packages/retention" },
     { "path": "../../packages/webauthn" },
     { "path": "../../packages/vault-client" },
     { "path": "../../packages/programs" }

@@ -7,9 +7,6 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../../packages/core" },
-    { "path": "../../packages/db" },
-    { "path": "../../packages/retention" },
-    { "path": "../../packages/service-auth" }
+    { "path": "../db" }
   ]
 }
