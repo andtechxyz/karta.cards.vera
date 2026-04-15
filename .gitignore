@@ -19,3 +19,4 @@ prisma/migrations/dev.db*
 # Browseable in-place for cross-project context (SUN spec, FIDO2 applet,
 # personalisation flow) but not Vera's source — never commit.
 external/
+.claude/
