@@ -12,6 +12,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@vera/core": "*",
     "express": "^4.21.2"
   },
   "devDependencies": {

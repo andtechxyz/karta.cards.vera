@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '@vera/db';
 import { validateBody, notFound, badRequest, conflict } from '@vera/core';
+import { requireCallerKeyId } from '@vera/service-auth';
 import { storeCard } from '../vault/index.js';
 
 const router: Router = Router();
@@ -12,13 +13,11 @@ const storeSchema = z.object({
   expiryMonth: z.string().regex(/^(0[1-9]|1[0-2])$/),
   expiryYear: z.string().regex(/^[0-9]{2,4}$/),
   cardholderName: z.string().min(1).max(128),
-  /**
-   * Audit attribution.  Services calling vault-client supply their own values
-   * (e.g. `actor: 'provisioning-agent'` from activation).  Admin UI callers
-   * omit them and fall back to the admin defaults below.
-   */
-  actor: z.string().min(1).max(64).default('admin'),
-  purpose: z.string().min(1).max(256).default('admin vault store'),
+  // `purpose` is a free-form audit annotation describing the sub-operation.
+  // The *caller identity* is not in the body — it comes from the verified
+  // HMAC keyId on req.callerKeyId.  PCI-DSS 10.2.1: only trust cryptographically
+  // attested actor identities in the audit log.
+  purpose: z.string().min(1).max(256),
   /**
    * Optional — when supplied, vault links the new VaultEntry onto this Card
    * atomically (the admin card-management flow).  When absent, vault just
@@ -31,6 +30,7 @@ const storeSchema = z.object({
 
 router.post('/store', validateBody(storeSchema), async (req, res) => {
   const body = req.body as z.infer<typeof storeSchema>;
+  const actor = requireCallerKeyId(req);
 
   if (body.cardId) {
     const card = await prisma.card.findUnique({ where: { id: body.cardId } });
@@ -46,7 +46,7 @@ router.post('/store', validateBody(storeSchema), async (req, res) => {
     expiryMonth: body.expiryMonth,
     expiryYear: body.expiryYear,
     cardholderName: body.cardholderName,
-    actor: body.actor,
+    actor,
     purpose: body.purpose,
     ip: req.ip,
     ua: req.get('user-agent') ?? undefined,

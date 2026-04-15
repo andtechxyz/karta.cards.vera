@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { ServiceAuthError, signRequest, verifyRequest } from './index.js';
+import type { Request } from 'express';
+import { ApiError } from '@vera/core';
+import { ServiceAuthError, signRequest, verifyRequest, requireCallerKeyId } from './index.js';
 
 // -----------------------------------------------------------------------------
 // Service-to-service HMAC: every failure mode that should keep the vault
@@ -270,6 +272,27 @@ describe('signRequest / verifyRequest', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ServiceAuthError);
       expect((err as ServiceAuthError).code).toBe('missing_auth');
+    }
+  });
+});
+
+describe('requireCallerKeyId', () => {
+  it('returns the callerKeyId when set by the middleware', () => {
+    const req = { callerKeyId: 'pay' } as unknown as Request;
+    expect(requireCallerKeyId(req)).toBe('pay');
+  });
+
+  it('throws a 500 ApiError with code caller_unidentified when missing', () => {
+    const req = {} as Request;
+    expect(() => requireCallerKeyId(req)).toThrowError(ApiError);
+    try {
+      requireCallerKeyId(req);
+    } catch (err) {
+      // Has to be ApiError so @vera/core's errorMiddleware serialises it as
+      // {error:{code,message}} rather than collapsing to "internal_error".
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).status).toBe(500);
+      expect((err as ApiError).code).toBe('caller_unidentified');
     }
   });
 });

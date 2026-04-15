@@ -13,8 +13,8 @@ import { getCardFieldKeyProvider } from './key-provider.js';
 // PANs go over HTTP to the vault service (never persisted directly from
 // activation).  UID + SDM keys are still encrypted inline — those are part of
 // the Card row, not the VaultEntry, and vault-service doesn't own them.
-
-const ACTOR = 'provisioning-agent';
+// Audit attribution on the vault side comes from the HMAC keyId ('activation');
+// this service does not self-report an actor.
 
 export interface RegisterCardInput {
   cardRef: string;
@@ -94,7 +94,6 @@ export async function registerCard(input: RegisterCardInput): Promise<RegisterCa
       expiryMonth: input.card.expiryMonth,
       expiryYear: input.card.expiryYear,
       cardholderName: input.card.cardholderName,
-      actor: ACTOR,
       purpose: `card register ${input.cardRef}`,
       onDuplicate: 'error',
       ip: input.ip,

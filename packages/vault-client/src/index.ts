@@ -10,13 +10,17 @@ import { signRequest } from '@vera/service-auth';
 // window (PCI-DSS 7.1/7.2/8.2).
 // -----------------------------------------------------------------------------
 
+// Every request carries the caller identity implicitly via the HMAC `keyId`
+// on the signed-request envelope — the vault records that as the VaultAccessLog
+// actor, so the body never carries a self-reported `actor`.  Only `purpose`
+// (free-form context) travels in the body.
+
 export interface StoreCardInput {
   pan: string;
   cvc?: string;
   expiryMonth: string;
   expiryYear: string;
   cardholderName: string;
-  actor: string;
   purpose: string;
   /** If set, vault links the new VaultEntry onto this Card row atomically. */
   cardId?: string;
@@ -36,7 +40,6 @@ export interface MintTokenInput {
   amount: number;
   currency: string;
   purpose: string;
-  actor: string;
   transactionId?: string;
   ip?: string;
   ua?: string;
@@ -52,7 +55,6 @@ export interface ConsumeTokenInput {
   token: string;
   expectedAmount: number;
   expectedCurrency: string;
-  actor: string;
   purpose: string;
   transactionId?: string;
   ip?: string;
@@ -85,7 +87,6 @@ export interface ProxyInput {
   expectedCurrency: string;
   purpose: string;
   transactionId?: string;
-  actor?: string;
   ip?: string;
   ua?: string;
 }
@@ -153,7 +154,7 @@ async function vaultFetch<T>(
 
 export function createVaultClient(baseUrl: string, auth: VaultClientOptions) {
   return {
-    /** Vault a PAN.  Caller supplies its own actor/purpose for audit attribution. */
+    /** Vault a PAN.  The verified caller identity (HMAC keyId) is the audit actor. */
     async storeCard(input: StoreCardInput): Promise<StoreCardResult> {
       return vaultFetch<StoreCardResult>(baseUrl, '/api/vault/store', 'POST', input, auth);
     },

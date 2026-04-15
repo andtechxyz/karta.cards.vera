@@ -117,7 +117,7 @@ describe('registerCard — conflict checks (fail before vault writes)', () => {
 });
 
 describe('registerCard — happy path', () => {
-  it('vaults the PAN with onDuplicate=error and tags the actor', async () => {
+  it('vaults the PAN with onDuplicate=error and the registration purpose', async () => {
     vi.mocked(findCard()).mockResolvedValue(null);
     vi.mocked(createCard()).mockResolvedValue({
       id: 'card_new',
@@ -134,13 +134,13 @@ describe('registerCard — happy path', () => {
         expiryMonth: VALID_INPUT.card.expiryMonth,
         expiryYear: VALID_INPUT.card.expiryYear,
         cardholderName: VALID_INPUT.card.cardholderName,
-        actor: 'provisioning-agent',
         purpose: `card register ${VALID_INPUT.cardRef}`,
         onDuplicate: 'error',
         ip: '1.2.3.4',
         ua: 'test-agent',
       }),
     );
+    expect(storeCardMock.mock.calls[0][0]).not.toHaveProperty('actor');
   });
 
   it('encrypts UID and both SDM keys in lowercase', async () => {

@@ -82,7 +82,6 @@ export async function orchestratePostAuth(
       amount: txn.amount,
       currency: txn.currency,
       purpose: `orchestration:${rlid}`,
-      actor: `transaction:${rlid}`,
       transactionId: txn.id,
       ip: input.ip,
       ua: input.ua,
@@ -94,7 +93,6 @@ export async function orchestratePostAuth(
       retrievalToken: tokenResult.token,
       expectedAmount: txn.amount,
       expectedCurrency: txn.currency,
-      actor: `transaction:${rlid}`,
       transactionId: txn.id,
     });
     await updateStatus(txn.id, TransactionStatus.VAULT_RETRIEVED, {

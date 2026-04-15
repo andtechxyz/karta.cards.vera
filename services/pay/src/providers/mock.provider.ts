@@ -19,7 +19,6 @@ export class MockProvider implements PaymentProvider {
     retrievalToken: string;
     expectedAmount: number;
     expectedCurrency: string;
-    actor: string;
     transactionId?: string;
     cardholderNameOverride?: string;
   }) {
@@ -27,7 +26,6 @@ export class MockProvider implements PaymentProvider {
       token: input.retrievalToken,
       expectedAmount: input.expectedAmount,
       expectedCurrency: input.expectedCurrency,
-      actor: input.actor,
       purpose: 'mock provider tokenise',
       transactionId: input.transactionId,
     });

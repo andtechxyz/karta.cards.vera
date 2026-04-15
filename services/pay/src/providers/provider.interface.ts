@@ -20,7 +20,6 @@ export interface PaymentProvider {
     retrievalToken: string;
     expectedAmount: number;
     expectedCurrency: string;
-    actor: string;
     transactionId?: string;
     cardholderNameOverride?: string;
   }): Promise<{ providerPaymentMethodId: string; last4: string }>;

@@ -38,14 +38,13 @@ describe('MockProvider.createPaymentMethod', () => {
     provider = new MockProvider(makeVaultClient({ consumeToken }));
   });
 
-  it('consumes the retrieval token with the expected amount/currency + actor', async () => {
+  it('consumes the retrieval token with the expected amount/currency', async () => {
     consumeToken.mockResolvedValue(freshConsume());
 
     await provider.createPaymentMethod({
       retrievalToken: 'tok_abc',
       expectedAmount: 4900,
       expectedCurrency: 'AUD',
-      actor: 'transaction:rl_x',
       transactionId: 'txn_x',
     });
 
@@ -54,11 +53,11 @@ describe('MockProvider.createPaymentMethod', () => {
         token: 'tok_abc',
         expectedAmount: 4900,
         expectedCurrency: 'AUD',
-        actor: 'transaction:rl_x',
         purpose: 'mock provider tokenise',
         transactionId: 'txn_x',
       }),
     );
+    expect(consumeToken.mock.calls[0][0]).not.toHaveProperty('actor');
   });
 
   it('returns a pm_mock_* id + last4 from the consumed card', async () => {
@@ -68,7 +67,6 @@ describe('MockProvider.createPaymentMethod', () => {
       retrievalToken: 'tok_abc',
       expectedAmount: 100,
       expectedCurrency: 'AUD',
-      actor: 'test',
     });
 
     expect(result.providerPaymentMethodId).toMatch(/^pm_mock_[a-z0-9]{24}$/);
@@ -83,7 +81,6 @@ describe('MockProvider.createPaymentMethod', () => {
         retrievalToken: 'tok_bad',
         expectedAmount: 100,
         expectedCurrency: 'AUD',
-        actor: 'test',
       }),
     ).rejects.toThrow('token_expired');
   });
@@ -104,7 +101,6 @@ describe('MockProvider.charge', () => {
       retrievalToken: 'tok_abc',
       expectedAmount: 100,
       expectedCurrency: 'AUD',
-      actor: 'test',
     });
 
     const charge = await provider.charge({
@@ -140,7 +136,6 @@ describe('MockProvider.charge', () => {
       retrievalToken: 'tok_abc',
       expectedAmount: 100,
       expectedCurrency: 'AUD',
-      actor: 'test',
     });
 
     const charge = await provider.charge({
@@ -158,10 +153,10 @@ describe('MockProvider.charge', () => {
   it('two createPaymentMethod calls produce distinct pm ids', async () => {
     consumeToken.mockResolvedValue(freshConsume());
     const a = await provider.createPaymentMethod({
-      retrievalToken: 'tok_a', expectedAmount: 100, expectedCurrency: 'AUD', actor: 't',
+      retrievalToken: 'tok_a', expectedAmount: 100, expectedCurrency: 'AUD',
     });
     const b = await provider.createPaymentMethod({
-      retrievalToken: 'tok_b', expectedAmount: 100, expectedCurrency: 'AUD', actor: 't',
+      retrievalToken: 'tok_b', expectedAmount: 100, expectedCurrency: 'AUD',
     });
     expect(a.providerPaymentMethodId).not.toBe(b.providerPaymentMethodId);
   });

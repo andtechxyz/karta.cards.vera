@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { internal } from '@vera/core';
 
 // -----------------------------------------------------------------------------
 // @vera/service-auth — HMAC-signed service-to-service requests.
@@ -188,6 +189,19 @@ export function requireSignedRequest(opts: RequireSignedRequestOptions): Request
 /** Read the verified caller id from a request that passed requireSignedRequest. */
 export function getCallerKeyId(req: Request): string | undefined {
   return (req as RequestWithRawBody).callerKeyId;
+}
+
+/**
+ * Throws a 500 ApiError if `req.callerKeyId` is missing.  That's an "impossible
+ * state" assert — `requireSignedRequest` sets it on every accepted request, so
+ * a missing value means middleware order is wrong, not that the caller is
+ * unauthenticated.  Handlers call this to collapse the null-check to one line
+ * and keep the error code consistent across routes.
+ */
+export function requireCallerKeyId(req: Request): string {
+  const id = getCallerKeyId(req);
+  if (!id) throw internal('caller_unidentified', 'callerKeyId missing on signed request');
+  return id;
 }
 
 // --- Internals --------------------------------------------------------------

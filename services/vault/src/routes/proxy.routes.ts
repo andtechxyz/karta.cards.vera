@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { validateBody } from '@vera/core';
+import { requireCallerKeyId } from '@vera/service-auth';
 import { forwardViaVault } from '../vault/index.js';
 
 const router: Router = Router();
@@ -15,13 +16,13 @@ const proxySchema = z.object({
   expectedCurrency: z.string().min(3).max(8),
   purpose: z.string().min(1).max(256),
   transactionId: z.string().optional(),
-  actor: z.string().optional(),
   ip: z.string().optional(),
   ua: z.string().optional(),
 });
 
 router.post('/proxy', validateBody(proxySchema), async (req, res) => {
   const body = req.body as z.infer<typeof proxySchema>;
+  const actor = requireCallerKeyId(req);
   const result = await forwardViaVault({
     retrievalToken: body.retrievalToken,
     destination: body.destination,
@@ -30,7 +31,7 @@ router.post('/proxy', validateBody(proxySchema), async (req, res) => {
     body: body.body,
     expectedAmount: body.expectedAmount,
     expectedCurrency: body.expectedCurrency,
-    actor: body.actor ?? 'proxy_caller',
+    actor,
     purpose: body.purpose,
     ip: body.ip ?? req.ip,
     ua: body.ua ?? req.get('user-agent') ?? undefined,
