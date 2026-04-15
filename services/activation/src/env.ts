@@ -11,6 +11,9 @@ const { get: getActivationConfig, reset: _resetActivationConfig } = defineEnv({
   TAP_HANDOFF_SECRET: z.string().min(32),
   PAY_URL: z.string().url().default('https://pay.karta.cards'),
   VAULT_SERVICE_URL: z.string().url().default('http://localhost:3004'),
+  // Shared secret for HMAC-signed vault calls; must appear verbatim in the
+  // vault service's SERVICE_AUTH_KEYS['activation'].
+  SERVICE_AUTH_ACTIVATION_SECRET: hexKey(32),
 });
 
 export { getActivationConfig, _resetActivationConfig };

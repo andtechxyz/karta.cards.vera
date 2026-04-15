@@ -47,7 +47,11 @@ export interface RegisterCardResult {
 let vaultClient: VaultClient | null = null;
 function getVaultClient(): VaultClient {
   if (!vaultClient) {
-    vaultClient = createVaultClient(getActivationConfig().VAULT_SERVICE_URL);
+    const config = getActivationConfig();
+    vaultClient = createVaultClient(config.VAULT_SERVICE_URL, {
+      keyId: 'activation',
+      secret: config.SERVICE_AUTH_ACTIVATION_SECRET,
+    });
   }
   return vaultClient;
 }

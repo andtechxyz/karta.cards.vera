@@ -1,10 +1,13 @@
 import { request } from 'undici';
+import { signRequest } from '@vera/service-auth';
 
 // -----------------------------------------------------------------------------
 // @vera/vault-client — typed HTTP client for the vault service.
 //
-// Pay service imports this instead of calling vault internals directly.
-// The vault service URL is read from VAULT_SERVICE_URL in env.
+// Pay and activation import this instead of calling vault internals directly.
+// Every request is HMAC-signed with the caller's keyId + shared secret; the
+// vault service rejects anything unsigned, tampered, or outside the replay
+// window (PCI-DSS 7.1/7.2/8.2).
 // -----------------------------------------------------------------------------
 
 export interface StoreCardInput {
@@ -104,17 +107,33 @@ export class VaultClientError extends Error {
   }
 }
 
+export interface VaultClientOptions {
+  /** This service's caller identity on the vault (e.g. 'pay', 'activation'). */
+  keyId: string;
+  /** 32-byte hex secret shared with the vault's SERVICE_AUTH_KEYS[keyId]. */
+  secret: string;
+}
+
 async function vaultFetch<T>(
   baseUrl: string,
   path: string,
   method: string,
   body: unknown,
+  auth: VaultClientOptions,
 ): Promise<T> {
   const url = `${baseUrl.replace(/\/$/, '')}${path}`;
+  const bodyBytes = Buffer.from(JSON.stringify(body), 'utf8');
+  const authorization = signRequest({
+    method,
+    pathAndQuery: path,
+    body: bodyBytes,
+    keyId: auth.keyId,
+    secret: auth.secret,
+  });
   const { statusCode, body: responseBody } = await request(url, {
     method,
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json', authorization },
+    body: bodyBytes,
   });
   const text = await responseBody.text();
   if (statusCode >= 400) {
@@ -132,26 +151,26 @@ async function vaultFetch<T>(
   return JSON.parse(text) as T;
 }
 
-export function createVaultClient(baseUrl: string) {
+export function createVaultClient(baseUrl: string, auth: VaultClientOptions) {
   return {
     /** Vault a PAN.  Caller supplies its own actor/purpose for audit attribution. */
     async storeCard(input: StoreCardInput): Promise<StoreCardResult> {
-      return vaultFetch<StoreCardResult>(baseUrl, '/api/vault/store', 'POST', input);
+      return vaultFetch<StoreCardResult>(baseUrl, '/api/vault/store', 'POST', input, auth);
     },
 
     /** Mint a single-use retrieval token for a vaulted entry. */
     async mintToken(input: MintTokenInput): Promise<MintTokenResult> {
-      return vaultFetch<MintTokenResult>(baseUrl, '/api/vault/tokens/mint', 'POST', input);
+      return vaultFetch<MintTokenResult>(baseUrl, '/api/vault/tokens/mint', 'POST', input, auth);
     },
 
     /** Atomically consume a retrieval token and return decrypted card data. */
     async consumeToken(input: ConsumeTokenInput): Promise<ConsumeTokenResult> {
-      return vaultFetch<ConsumeTokenResult>(baseUrl, '/api/vault/tokens/consume', 'POST', input);
+      return vaultFetch<ConsumeTokenResult>(baseUrl, '/api/vault/tokens/consume', 'POST', input, auth);
     },
 
     /** Forward a request through the vault proxy (PAN substitution). */
     async proxy(input: ProxyInput): Promise<ProxyResult> {
-      return vaultFetch<ProxyResult>(baseUrl, '/api/vault/proxy', 'POST', input);
+      return vaultFetch<ProxyResult>(baseUrl, '/api/vault/proxy', 'POST', input, auth);
     },
   };
 }

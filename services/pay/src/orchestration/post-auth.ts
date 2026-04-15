@@ -73,7 +73,10 @@ export async function orchestratePostAuth(
 
     // --- 3. Mint retrieval token via vault-client --------------------------
     const config = getPayConfig();
-    const vaultClient = createVaultClient(config.VAULT_SERVICE_URL);
+    const vaultClient = createVaultClient(config.VAULT_SERVICE_URL, {
+      keyId: 'pay',
+      secret: config.SERVICE_AUTH_PAY_SECRET,
+    });
     const tokenResult = await vaultClient.mintToken({
       vaultEntryId: txn.card.vaultEntryId,
       amount: txn.amount,

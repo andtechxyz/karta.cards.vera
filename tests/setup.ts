@@ -11,6 +11,8 @@ const HEX32_B = '1'.repeat(64);
 const HEX32_C = '2'.repeat(64);
 const HEX32_D = '3'.repeat(64);
 const HEX32_E = '4'.repeat(64);
+const HEX32_F = '5'.repeat(64);
+const HEX32_G = '6'.repeat(64);
 
 const defaults: Record<string, string> = {
   NODE_ENV: 'test',
@@ -37,6 +39,11 @@ const defaults: Record<string, string> = {
   ACTIVATION_URL: 'https://activation.karta.cards',
   // Vault service
   VAULT_SERVICE_URL: 'http://localhost:3004',
+  // Service-to-service HMAC — distinct secret per caller; vault's map must
+  // carry the same values under each caller's keyId.
+  SERVICE_AUTH_PAY_SECRET: HEX32_F,
+  SERVICE_AUTH_ACTIVATION_SECRET: HEX32_G,
+  SERVICE_AUTH_KEYS: JSON.stringify({ pay: HEX32_F, activation: HEX32_G }),
 };
 
 for (const [k, v] of Object.entries(defaults)) {

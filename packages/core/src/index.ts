@@ -14,6 +14,7 @@ export {
   baseEnvShape,
   vaultPanCryptoEnvShape,
   cardFieldCryptoEnvShape,
+  serviceAuthServerEnvShape,
   hexKey,
   originList,
 } from './env.js';

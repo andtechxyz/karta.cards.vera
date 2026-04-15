@@ -9,7 +9,10 @@ let cached: PaymentProvider | null = null;
 export function getPaymentProvider(): PaymentProvider {
   if (cached) return cached;
   const config = getPayConfig();
-  const vaultClient = createVaultClient(config.VAULT_SERVICE_URL);
+  const vaultClient = createVaultClient(config.VAULT_SERVICE_URL, {
+    keyId: 'pay',
+    secret: config.SERVICE_AUTH_PAY_SECRET,
+  });
   switch (config.PAYMENT_PROVIDER) {
     case 'stripe':
       cached = new StripeProvider(vaultClient);

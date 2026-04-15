@@ -87,6 +87,60 @@ export const cardFieldCryptoEnvShape = {
   CARD_FIELD_DEK_ACTIVE_VERSION: z.coerce.number().int().positive().default(1),
 } as const;
 
+// -----------------------------------------------------------------------------
+// Service-to-service auth env shape.
+//
+// Vault (the server) holds a JSON-encoded map of caller keyId → 32-byte hex
+// secret.  One entry per legitimate caller (pay, activation).  Pay and
+// activation each hold their own single client secret under a service-specific
+// variable name declared in their own env.ts — there is no shared shape for
+// the client side because the two callers must have independent secrets.
+// -----------------------------------------------------------------------------
+
+export const serviceAuthServerEnvShape = {
+  SERVICE_AUTH_KEYS: z
+    .string()
+    .min(1)
+    .transform((raw, ctx): Record<string, string> => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'SERVICE_AUTH_KEYS must be a JSON object mapping keyId to hex secret',
+        });
+        return z.NEVER;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'SERVICE_AUTH_KEYS must be a JSON object',
+        });
+        return z.NEVER;
+      }
+      const out: Record<string, string> = {};
+      for (const [id, val] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof val !== 'string' || !/^[0-9a-fA-F]{64}$/.test(val)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `SERVICE_AUTH_KEYS[${id}] must be 32-byte hex (64 chars)`,
+          });
+          return z.NEVER;
+        }
+        out[id] = val;
+      }
+      if (Object.keys(out).length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'SERVICE_AUTH_KEYS must declare at least one caller',
+        });
+        return z.NEVER;
+      }
+      return out;
+    }),
+} as const;
+
 /**
  * Build a process-wide config loader from a zod shape.  Caches the parsed
  * result; exposes `_reset()` for tests.
