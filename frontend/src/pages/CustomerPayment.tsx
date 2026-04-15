@@ -13,6 +13,7 @@ interface Transaction {
   status: string;
   tier: 'TIER_1' | 'TIER_2' | 'TIER_3';
   actualTier: 'TIER_1' | 'TIER_2' | 'TIER_3' | null;
+  allowedCredentialKinds: CredentialKind[];
   amount: number;
   currency: string;
   merchantName: string;
@@ -28,20 +29,24 @@ interface CardSummary {
 }
 
 /**
- * Pick which ceremony to offer for this (tier, device) combination.
- * Returns null if the combination isn't supported (e.g. Tier 2 on iOS Safari).
+ * Pick which ceremony to offer for this (policy, device) combination.
+ * Returns null if the policy can't be satisfied on this device (e.g. a
+ * CROSS_PLATFORM-only transaction loaded on iOS Safari — the CTAP1-over-NFC
+ * path isn't reachable through Safari reliably; only Android Chrome is).
+ *
+ * When both kinds are in policy we prefer PLATFORM: it's the fastest ceremony
+ * available on every device and produces the same server-side authorisation
+ * as a CROSS_PLATFORM tap.
  */
 function preferredKind(
-  tier: Transaction['tier'],
+  allowed: CredentialKind[],
   device: Device,
 ): CredentialKind | null {
-  if (tier === 'TIER_2') {
-    // Mid-tier is NFC card tap.  Android Chrome is the only reliable path
-    // per the New T4T learnings (CTAP1 over NFC).
-    if (device === 'android') return 'CROSS_PLATFORM';
-    return null; // iOS Safari + desktop can't tap an NFC card through a browser reliably
-  }
-  return 'PLATFORM';
+  const platformOk = allowed.includes('PLATFORM');
+  const crossOk = allowed.includes('CROSS_PLATFORM');
+  if (platformOk) return 'PLATFORM';
+  if (crossOk && device === 'android') return 'CROSS_PLATFORM';
+  return null;
 }
 
 export default function CustomerPayment() {
@@ -75,7 +80,7 @@ export default function CustomerPayment() {
 
   const { events, last, terminal } = usePaymentSse(txn?.rlid);
 
-  const preferred = txn ? preferredKind(txn.tier, device) : null;
+  const preferred = txn ? preferredKind(txn.allowedCredentialKinds, device) : null;
   const hasCredential = Boolean(
     card && preferred && card.credentials.some((c) => c.kind === preferred),
   );
@@ -173,10 +178,11 @@ export default function CustomerPayment() {
         <div className="panel">
           {preferred === null ? (
             <>
-              <p className="tag warn">Tier 2 NFC tap requires Android Chrome.</p>
+              <p className="tag warn">This payment requires an NFC card tap.</p>
               <p className="small">
-                Open this payment link on an Android phone running Chrome, and tap
-                your Palisade card to authenticate.
+                Open this link on an Android phone running Chrome, then tap
+                your Palisade card against the back of the device to authenticate.
+                Browser-driven NFC isn't reliably supported on iOS Safari or desktop.
               </p>
             </>
           ) : !hasCredential ? (

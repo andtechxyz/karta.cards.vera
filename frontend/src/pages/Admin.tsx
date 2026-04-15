@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, errorMsg } from '../utils/api';
 import { formatDate, formatMoney } from '../utils/format';
 import { luhnValid } from '../utils/luhn';
-import type { CredentialKind } from '../utils/webauthn';
+import { CREDENTIAL_KINDS, type CredentialKind } from '../utils/webauthn';
 
 // Admin UI — read-only view of cards, vault entries, transactions, and the
 // vault audit tail.
@@ -13,7 +13,7 @@ import type { CredentialKind } from '../utils/webauthn';
 // SDM URL fires → /activate?session=<token>.  Admin sees the resulting
 // state but cannot mint sessions or links itself.
 
-type TabKey = 'cards' | 'vault' | 'transactions' | 'audit';
+type TabKey = 'cards' | 'vault' | 'programs' | 'transactions' | 'audit';
 
 interface ActivationSessionRow {
   id: string;
@@ -43,7 +43,7 @@ export default function Admin() {
       <h1>Vera Admin</h1>
       <p className="small">Cards, vault, WebAuthn credentials, transactions, audit.</p>
       <div className="tabs">
-        {(['cards', 'vault', 'transactions', 'audit'] as const).map((t) => (
+        {(['cards', 'vault', 'programs', 'transactions', 'audit'] as const).map((t) => (
           <button
             key={t}
             className={`tab ${tab === t ? 'active' : ''}`}
@@ -55,6 +55,7 @@ export default function Admin() {
       </div>
       {tab === 'cards' && <CardsTab />}
       {tab === 'vault' && <VaultTab />}
+      {tab === 'programs' && <ProgramsTab />}
       {tab === 'transactions' && <TransactionsTab />}
       {tab === 'audit' && <AuditTab />}
     </div>
@@ -64,6 +65,7 @@ export default function Admin() {
 const labels: Record<TabKey, string> = {
   cards: 'Cards',
   vault: 'Vault',
+  programs: 'Programs',
   transactions: 'Transactions',
   audit: 'Audit',
 };
@@ -265,6 +267,368 @@ function VaultTab() {
       </div>
       {ok && <p className="tag ok" style={{ marginTop: 12 }}>{ok}</p>}
       {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+    </div>
+  );
+}
+
+// --- Programs tab ------------------------------------------------------------
+
+// Shape mirrors the server's Program prisma model + tierRuleSchema
+// (see src/programs/tier-rules.ts).  Keep in sync; the backend is the
+// source of truth and validates on every write.
+interface TierRule {
+  amountMinMinor: number;
+  amountMaxMinor: number | null;
+  allowedKinds: CredentialKind[];
+  label?: string;
+}
+
+interface Program {
+  id: string;
+  name: string;
+  currency: string;
+  tierRules: TierRule[];
+  preActivationNdefUrlTemplate: string | null;
+  postActivationNdefUrlTemplate: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function ProgramsTab() {
+  const [programs, setPrograms] = useState<Program[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Program | 'new' | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      setPrograms(await api.get<Program[]>('/programs'));
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (editing !== null) {
+    return (
+      <ProgramForm
+        program={editing === 'new' ? null : editing}
+        onSaved={async () => {
+          setEditing(null);
+          await load();
+        }}
+        onCancel={() => setEditing(null)}
+      />
+    );
+  }
+
+  return (
+    <div className="panel">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Programs</h2>
+        <button className="btn primary" onClick={() => setEditing('new')}>
+          New program
+        </button>
+      </div>
+      <p className="small" style={{ marginTop: 8 }}>
+        Card products: currency, tier rules, and NDEF URL templates.  Palisade
+        reads the templates at perso time (pre-activation URL baked into the
+        card) and after Vera confirms activation (post-activation URL written
+        via authenticated APDU).
+      </p>
+      {err && <p className="tag err" style={{ marginTop: 8 }}>{err}</p>}
+      {loading ? (
+        <p className="small">Loading…</p>
+      ) : programs.length === 0 ? (
+        <p className="small">
+          No programs yet. Create one to override Vera's built-in default
+          (AUD, biometric under AUD 100 / card tap at or above).
+        </p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Currency</th>
+              <th>Rules</th>
+              <th>NDEF templates</th>
+              <th>Updated</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {programs.map((p) => (
+              <tr key={p.id}>
+                <td className="mono">{p.id}</td>
+                <td>{p.name}</td>
+                <td className="mono">{p.currency}</td>
+                <td className="small">{p.tierRules.length} rule{p.tierRules.length === 1 ? '' : 's'}</td>
+                <td className="small">
+                  {p.preActivationNdefUrlTemplate ? 'pre ✓' : 'pre —'}
+                  {' / '}
+                  {p.postActivationNdefUrlTemplate ? 'post ✓' : 'post —'}
+                </td>
+                <td className="small">{formatDate(p.updatedAt)}</td>
+                <td>
+                  <button className="btn ghost" onClick={() => setEditing(p)}>
+                    Edit
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// Mirrors DEFAULT_TIER_RULES in src/programs/tier-rules.ts — the shape and
+// threshold the server applies when a card has no linked program.
+const NEW_PROGRAM_DEFAULT_RULES: readonly TierRule[] = [
+  { amountMinMinor: 0, amountMaxMinor: 10_000, allowedKinds: ['PLATFORM'], label: 'Biometric' },
+  { amountMinMinor: 10_000, amountMaxMinor: null, allowedKinds: ['CROSS_PLATFORM'], label: 'Card tap' },
+];
+
+function cloneRules(rules: readonly TierRule[]): TierRule[] {
+  return rules.map((r) => ({ ...r, allowedKinds: [...r.allowedKinds] }));
+}
+
+function ProgramForm({
+  program,
+  onSaved,
+  onCancel,
+}: {
+  program: Program | null;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [id, setId] = useState(program?.id ?? '');
+  const [name, setName] = useState(program?.name ?? '');
+  const [currency, setCurrency] = useState(program?.currency ?? 'AUD');
+  const [rules, setRules] = useState<TierRule[]>(() =>
+    cloneRules(program?.tierRules ?? NEW_PROGRAM_DEFAULT_RULES),
+  );
+  const [pre, setPre] = useState(program?.preActivationNdefUrlTemplate ?? '');
+  const [post, setPost] = useState(program?.postActivationNdefUrlTemplate ?? '');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const body = {
+        name,
+        currency,
+        tierRules: rules,
+        preActivationNdefUrlTemplate: pre.trim() ? pre.trim() : null,
+        postActivationNdefUrlTemplate: post.trim() ? post.trim() : null,
+      };
+      if (program) {
+        await api.patch<Program>(`/programs/${program.id}`, body);
+      } else {
+        await api.post<Program>('/programs', { id, ...body });
+      }
+      onSaved();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>{program ? `Edit ${program.id}` : 'New program'}</h2>
+        <button className="btn ghost" onClick={onCancel}>Cancel</button>
+      </div>
+
+      {!program && (
+        <>
+          <label>Program ID</label>
+          <input
+            value={id}
+            onChange={(e) => setId(e.target.value)}
+            placeholder="prog_mc_plat_01"
+            className="mono"
+          />
+          <p className="small">Palisade's programId — alphanumeric + _ - only; immutable after create.</p>
+        </>
+      )}
+
+      <label>Name</label>
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Mastercard Platinum" />
+
+      <label>Currency (ISO 4217)</label>
+      <input
+        value={currency}
+        onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+        className="mono"
+        maxLength={3}
+        style={{ width: 80 }}
+      />
+
+      <h3 style={{ marginTop: 20 }}>Tier rules</h3>
+      <p className="small">
+        Rules must be contiguous (no gaps), start at 0, and end with an
+        unbounded last rule (max = blank). Amounts are in minor units — AUD
+        100.00 = 10000.
+      </p>
+      <RuleEditor rules={rules} onChange={setRules} />
+
+      <h3 style={{ marginTop: 20 }}>NDEF URL templates</h3>
+      <p className="small">
+        Must contain <span className="mono">{'{cardRef}'}</span>. SDM markers{' '}
+        <span className="mono">{'{PICCData}'}</span> and{' '}
+        <span className="mono">{'{CMAC}'}</span> are passed through verbatim for
+        on-card substitution. Leave blank to fall back to Vera defaults.
+      </p>
+
+      <label>Pre-activation (baked at perso)</label>
+      <input
+        value={pre}
+        onChange={(e) => setPre(e.target.value)}
+        className="mono"
+        placeholder="https://pay.karta.cards/activate/{cardRef}?e={PICCData}&m={CMAC}"
+      />
+
+      <label>Post-activation (written after WebAuthn registration)</label>
+      <input
+        value={post}
+        onChange={(e) => setPost(e.target.value)}
+        className="mono"
+        placeholder="https://pay.karta.cards/tap/{cardRef}?e={PICCData}&m={CMAC}"
+      />
+
+      <div style={{ marginTop: 16 }}>
+        <button
+          className="btn primary"
+          onClick={save}
+          disabled={busy || (!program && !id) || !name || !currency}
+        >
+          {busy ? 'Saving…' : program ? 'Save changes' : 'Create program'}
+        </button>
+      </div>
+      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+    </div>
+  );
+}
+
+function RuleEditor({
+  rules,
+  onChange,
+}: {
+  rules: TierRule[];
+  onChange: (r: TierRule[]) => void;
+}) {
+  const set = (i: number, patch: Partial<TierRule>) => {
+    onChange(rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  };
+  const add = () => {
+    if (rules.length === 0) {
+      onChange([{ amountMinMinor: 0, amountMaxMinor: null, allowedKinds: ['PLATFORM'] }]);
+      return;
+    }
+    const last = rules[rules.length - 1];
+    const nextMin = last.amountMaxMinor ?? 0;
+    onChange([
+      ...rules.slice(0, -1),
+      { ...last, amountMaxMinor: nextMin },
+      { amountMinMinor: nextMin, amountMaxMinor: null, allowedKinds: ['CROSS_PLATFORM'] },
+    ]);
+  };
+  const remove = (i: number) => {
+    if (rules.length <= 1) return;
+    onChange(rules.filter((_, idx) => idx !== i));
+  };
+
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      {rules.map((r, i) => (
+        <div
+          key={i}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr 2fr 2fr auto',
+            gap: 8,
+            alignItems: 'end',
+            padding: 8,
+            border: '1px solid var(--edge)',
+            borderRadius: 6,
+          }}
+        >
+          <div>
+            <label>Min (minor)</label>
+            <input
+              type="number"
+              value={r.amountMinMinor}
+              onChange={(e) => set(i, { amountMinMinor: Number(e.target.value) })}
+              className="mono"
+            />
+          </div>
+          <div>
+            <label>Max (minor, blank = ∞)</label>
+            <input
+              type="number"
+              value={r.amountMaxMinor ?? ''}
+              onChange={(e) =>
+                set(i, {
+                  amountMaxMinor: e.target.value === '' ? null : Number(e.target.value),
+                })
+              }
+              className="mono"
+            />
+          </div>
+          <div>
+            <label>Allowed kinds</label>
+            <div style={{ display: 'flex', gap: 10, paddingTop: 4 }}>
+              {CREDENTIAL_KINDS.map((k) => (
+                <label key={k} className="small" style={{ display: 'flex', gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={r.allowedKinds.includes(k)}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                        ? [...r.allowedKinds, k]
+                        : r.allowedKinds.filter((x) => x !== k);
+                      set(i, { allowedKinds: next });
+                    }}
+                  />
+                  {k === 'PLATFORM' ? 'Bio' : 'NFC'}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label>Label (optional)</label>
+            <input
+              value={r.label ?? ''}
+              onChange={(e) => set(i, { label: e.target.value || undefined })}
+              placeholder="Biometric under AUD 100"
+            />
+          </div>
+          <button
+            className="btn ghost"
+            onClick={() => remove(i)}
+            disabled={rules.length <= 1}
+            title={rules.length <= 1 ? 'At least one rule required' : 'Remove rule'}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      <div>
+        <button className="btn ghost" onClick={add}>+ Add rule</button>
+      </div>
     </div>
   );
 }

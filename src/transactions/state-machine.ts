@@ -1,4 +1,5 @@
 import { TransactionStatus } from '@prisma/client';
+import { conflict } from '../middleware/error.js';
 
 // -----------------------------------------------------------------------------
 // Transaction state machine.
@@ -77,7 +78,8 @@ export function assertTransition(
   to: TransactionStatus,
 ): void {
   if (!canTransition(from, to)) {
-    throw new Error(
+    throw conflict(
+      'illegal_transition',
       `Illegal transaction transition: ${from} → ${to}. Transaction may already be terminal.`,
     );
   }

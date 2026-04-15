@@ -1,4 +1,5 @@
 import { getConfig } from '../config.js';
+import { badRequest } from '../middleware/error.js';
 
 // -----------------------------------------------------------------------------
 // NDEF URL templates.
@@ -71,16 +72,23 @@ function substituteCardRef(template: string, cardRef: string): string {
  */
 export function validateNdefUrlTemplate(template: string): void {
   if (!/^https?:\/\//i.test(template)) {
-    throw new Error(`NDEF URL template must be http(s): got "${template}"`);
+    throw badRequest(
+      'invalid_ndef_template',
+      `NDEF URL template must be http(s): got "${template}"`,
+    );
   }
   if (!template.includes('{cardRef}')) {
-    throw new Error(`NDEF URL template must contain {cardRef}: "${template}"`);
+    throw badRequest(
+      'invalid_ndef_template',
+      `NDEF URL template must contain {cardRef}: "${template}"`,
+    );
   }
   const tokens = template.match(/\{[^}]+\}/g) ?? [];
   const allowed = new Set<string>(['{cardRef}', ...SDM_MARKERS]);
   for (const tok of tokens) {
     if (!allowed.has(tok)) {
-      throw new Error(
+      throw badRequest(
+        'invalid_ndef_template',
         `NDEF URL template contains unknown placeholder ${tok}; allowed: {cardRef}, {PICCData}, {CMAC}`,
       );
     }

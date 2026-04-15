@@ -17,6 +17,9 @@ import { api } from './api';
 
 export type CredentialKind = 'PLATFORM' | 'CROSS_PLATFORM';
 
+/** Runtime array of every CredentialKind — for UI loops that need one row per kind. */
+export const CREDENTIAL_KINDS: readonly CredentialKind[] = ['PLATFORM', 'CROSS_PLATFORM'] as const;
+
 export async function registerCredential(input: {
   cardId: string;
   kind: CredentialKind;

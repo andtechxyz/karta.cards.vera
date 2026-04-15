@@ -145,7 +145,9 @@ curl -X POST https://pay.karta.cards/api/cards/register \
 
 ### Tier 2 smoke test (Android Chrome only)
 
-1. Set the cart total over $50 so it falls into Tier 2.
+1. The demo cart totals AUD 87, which sits under Vera's default AUD 100 threshold (biometric only). To trigger the NFC-tap branch either:
+   - bump the cart in `frontend/src/pages/MerchantCheckout.tsx` above AUD 100, or
+   - via Admin → Programs, link the card to a program with a lower `CROSS_PLATFORM` threshold.
 2. The SUN-tap activation already registered a CROSS_PLATFORM credential — no extra registration step needed.
 3. On Android Chrome, open `/pay/{rlid}` and tap the Palisade card against the back of the phone.
 4. The CTAP1 config in `src/webauthn/config.ts` is verbatim from New T4T — see the plan doc's "WebAuthn/NFC requirements" section before changing it.
@@ -208,6 +210,31 @@ payment in Vera — both services would need to run on the same WebAuthn
 origin (so RP IDs match) and share the credential store. That's out of
 scope for the prototype; the module boundaries here don't block it.
 
+### Palisade integration endpoints
+
+The Palisade provisioning-agent and NDEF-updater talk to Vera through a
+narrow surface. Each endpoint maps to a single moment in the card lifecycle:
+
+| Moment | Endpoint | What Palisade does |
+|---|---|---|
+| Program seeded (admin) | `POST /api/programs` | Defines a card product: `{ id, name, currency, tierRules, preActivationNdefUrlTemplate?, postActivationNdefUrlTemplate? }`. Templates are validated (must contain `{cardRef}`; may contain SDM markers `{PICCData}` / `{CMAC}` passed through verbatim). Null templates fall back to `WEBAUTHN_ORIGIN`-derived defaults. |
+| Program edited | `PATCH /api/programs/:id` | Partial update. Same Zod validation as create; unchanged fields stay as-is. Rules re-validated for contiguity on every write. |
+| Perso time — NDEF URL lookup | `GET /api/programs/cards/by-ref/:cardRef/ndef-urls` (or by cuid: `/api/programs/cards/:cardId/ndef-urls`) | Returns `{ preActivation, postActivation }` with `{cardRef}` already substituted and SDM markers preserved. Palisade's perso pipeline writes `preActivation` into the card's NDEF file. |
+| Card registered | `POST /api/cards/register` | Ingest: vaults the PAN, creates the Card row, stores `uidEncrypted` + `uidFingerprint`. Idempotent on `(cardRef)`. |
+| Cardholder taps (first time) | `GET /activate/:cardRef?e=<PICCData>&m=<CMAC>` (mounted at root, **not** `/api`) | Vera verifies SUN + mints a 60s ActivationSession → 302 → `/activate?session=<token>`. |
+| Registration ceremony | `POST /api/activation/sessions/:token/{begin,finish}` | `finish` returns `{ cardActivated: true, credentialId, postActivationNdefUrl }`. The `postActivationNdefUrl` is the already-rendered post-activation template (from the card's program, or default). **Palisade's NDEF updater reads this response and writes the URL to the card via authenticated APDU** so subsequent taps route to the payment-initiation flow instead of activation. |
+
+Tier rules are authoritative at `POST /api/transactions` creation time — the
+server computes `allowedCredentialKinds` from the card's program (or
+`DEFAULT_TIER_RULES` if the card is unlinked) and stores it on the
+Transaction. The customer page reads that field and never has to know about
+rule shape or program ID.
+
+Currencies are ISO 4217 (3-letter); `POST /api/transactions` rejects a
+transaction whose currency doesn't match the card's program currency, so a
+USD cart against an AUD program fails loud instead of silently miscomputing
+the tier.
+
 ## New T4T-derived rules for WebAuthn/NFC
 
 These are non-negotiable — every deviation in the New T4T history led to
@@ -236,5 +263,7 @@ before touching `src/webauthn/config.ts`.
 - Provisioning ingest: `src/cards/register.service.ts` + `src/routes/cards.routes.ts`
 - SUN-tap landing: `src/routes/sun-tap.routes.ts` (mounted at `/`, not `/api`)
 - Orchestration entry point: `src/orchestration/post-auth.ts`
-- Tiering: `src/transactions/tier.ts`
+- Tiering: `src/transactions/tier.ts` (evaluates per-program `TierRuleSet`)
+- Program CRUD + NDEF URL resolution: `src/programs/` + `src/routes/programs.routes.ts`
+- Program defaults (AUD 100 bio/tap cutover): `DEFAULT_TIER_RULES` in `src/programs/tier-rules.ts`
 - WebAuthn config: `src/webauthn/config.ts` (CTAP1-verbatim — handle with care)

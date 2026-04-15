@@ -25,7 +25,10 @@ const CART: { title: string; subtitle: string; priceMinor: number }[] = [
   { title: 'Terracotta planter', subtitle: 'Hand-thrown, 22cm', priceMinor: 2600 },
   { title: 'Potting mix', subtitle: 'Organic, 10L', priceMinor: 1200 },
 ];
-const CURRENCY = 'USD';
+// AUD to match Vera's first-jurisdiction default (matches DEFAULT_TIER_RULES'
+// AUD 100 threshold — a USD total here would trip the per-program currency
+// mismatch guard once the card is linked to a program).
+const CURRENCY = 'AUD';
 
 interface Card {
   id: string;

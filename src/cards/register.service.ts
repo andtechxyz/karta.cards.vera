@@ -1,7 +1,7 @@
 import { CardStatus } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { encrypt, storeCard } from '../vault/index.js';
-import { conflict } from '../middleware/error.js';
+import { conflict, internal } from '../middleware/error.js';
 import { fingerprintUid } from './fingerprint.js';
 
 // Card registration — the entry point for Palisade's provisioning-agent.
@@ -89,7 +89,7 @@ export async function registerCard(input: RegisterCardInput): Promise<RegisterCa
     uidEnc.keyVersion !== metaKeyEnc.keyVersion ||
     metaKeyEnc.keyVersion !== fileKeyEnc.keyVersion
   ) {
-    throw new Error('vault key version drift mid-call');
+    throw internal('vault_key_drift', 'vault key version drift mid-call');
   }
 
   const card = await prisma.card.create({
