@@ -15,3 +15,8 @@ export function formatCountdown(sec: number): string {
   const s = sec % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
+
+/** Floor((deadline - now) / 1000), clamped at 0.  ISO string in, integer out. */
+export function secondsUntil(iso: string, now: number = Date.now()): number {
+  return Math.max(0, Math.floor((new Date(iso).getTime() - now) / 1000));
+}

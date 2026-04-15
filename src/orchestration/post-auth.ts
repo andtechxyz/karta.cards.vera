@@ -72,7 +72,7 @@ export async function orchestratePostAuth(
     const atc = await reserveAtc(txn.cardId);
     const arqcInput = {
       bin: txn.card.vaultEntry.panBin,
-      cardIdentifier: txn.card.cardIdentifier,
+      cardId: txn.card.id,
       atc,
       amount: txn.amount,
       currency: txn.currency,

@@ -25,3 +25,7 @@ export { startAuditSubscriber, listAuditEvents } from './audit.service.js';
 export { vaultEvents } from './events.js';
 export type { VaultEvent } from './events.js';
 export { luhnValid, fingerprintPan } from './fingerprint.js';
+// Exposed so modules that store non-PAN secrets under the same vault key
+// versioning (UID, SDM keys) can encrypt/decrypt without reaching past the
+// barrel.  Same AES-256-GCM envelope; same KeyProvider-backed rotation path.
+export { encrypt, decrypt } from './encryption.js';

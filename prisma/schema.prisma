@@ -1,19 +1,35 @@
 // Vera — Palisade Payment Prototype
 //
-// Data model. Key decisions (see plan at
-// /Users/danderson/.claude/plans/tingly-imagining-sketch.md):
+// Data model.  Key decisions (see plan at
+// /Users/danderson/.claude/plans/tingly-imagining-sketch.md and the lifecycle
+// diagram the user signed off on):
+//
 //   - No per-card IMK.  ARQC keys derive from VERA_ROOT_ARQC_SEED via BIN
 //     + PAN + ATC on the fly.
-//   - Card.cardIdentifier holds the PICC UID hex (schema-compatible with
-//     New T4T's `uid`), so cards may later roam across RPs.
+//   - **No plaintext PICC UID anywhere.**  The UID is stored only as ciphertext
+//     (`uidEncrypted`) and as a deterministic HMAC fingerprint
+//     (`uidFingerprint`) for SUN-tap lookup.  The opaque `cardRef` is the only
+//     identifier that ever appears in a URL or HTTP boundary.
+//   - **No code-based activation.**  Activation is initiated by the cardholder
+//     tapping the physical card.  The SDM/SUN URL fires `/activate/:cardRef`
+//     with `e=<picc>&m=<cmac>` query params (counter lives inside the encrypted
+//     PICC, not as a separate `c=`); the backend decrypts + MAC-verifies,
+//     advances `lastReadCounter` atomically (replay defence), and mints an
+//     `ActivationSession` whose opaque token drives the identity-blind page.
+//   - **Card lifecycle: BLANK → PERSONALISED → ACTIVATED → SUSPENDED/REVOKED.**
+//     Palisade data-prep produces a card package; the provisioning-agent calls
+//     `POST /api/cards/register` which lands the Card in PERSONALISED with a
+//     linked VaultEntry.  First successful SUN-tap + WebAuthn registration
+//     flips it to ACTIVATED.
 //   - VaultEntry is fingerprinted (HMAC-SHA256) for dedup without decrypt.
-//   - VaultEncryptionKey + keyVersion on VaultEntry supports rotation.
-//   - VaultAccessLog records every vault event — nothing touches PANs
-//     without an audit row.
-//   - Transaction status is an enum with explicit valid transitions
-//     enforced in service code (src/transactions/state-machine.ts).
-//   - Provider-agnostic: Transaction stores providerName/providerPaymentMethodId/
-//     providerTxnId.  Stripe-specific fields are renamed.
+//   - VaultEncryptionKey + keyVersion on VaultEntry / Card supports rotation
+//     for both PAN ciphertext and SDM-key ciphertext.
+//   - VaultAccessLog records every vault event — nothing touches PANs without
+//     an audit row.
+//   - Transaction status is an enum with explicit valid transitions enforced
+//     in service code (src/transactions/state-machine.ts).
+//   - Provider-agnostic: Transaction stores providerName /
+//     providerPaymentMethodId / providerTxnId.
 
 generator client {
   provider = "prisma-client-js"
@@ -25,34 +41,152 @@ datasource db {
 }
 
 // ---------------------------------------------------------------------------
+// Programs
+// ---------------------------------------------------------------------------
+//
+// A Program is an issuer-scoped card product (e.g. Bank A's Platinum AUD
+// Mastercard).  The Palisade programId string (e.g. "prog_mc_plat_01") is the
+// primary key — it's the stable identifier the provisioning-agent already
+// hands us, so we use it verbatim rather than translating to a cuid.
+//
+// `tierRules` is a JSON array of TierRule objects (schema enforced at write
+// time by src/programs/tier-rules.ts).  Rules map amount ranges to the set of
+// CredentialKinds acceptable for authentication — e.g. Bank A may say
+// "under AUD 200: PLATFORM only; AUD 200+: CROSS_PLATFORM only", while
+// Bank B can configure its own thresholds without code changes.
+//
+// A card with no linked Program (programId NULL, or pointing to a deleted
+// program) falls back to DEFAULT_TIER_RULES.
+
+model Program {
+  id        String   @id // Palisade programId, e.g. "prog_mc_plat_01"
+  name      String
+  currency  String   @db.VarChar(3) // ISO 4217 — all rules and card txns in this currency
+  tierRules Json // TierRule[] — shape validated by Zod on write
+
+  // --- NDEF URL templates --------------------------------------------------
+  // Palisade writes these into the card's NDEF file at two moments:
+  //
+  //  preActivationNdefUrlTemplate  — baked at personalisation.  Hits the
+  //                                  SUN-tap activation handler on first tap.
+  //  postActivationNdefUrlTemplate — written to the card after successful
+  //                                  WebAuthn registration so subsequent
+  //                                  taps route to the payment-initiation
+  //                                  flow instead of activation.
+  //
+  // Templates may contain two classes of placeholder:
+  //   {cardRef}  — substituted server-side by Vera (stable per-card slug)
+  //   {PICCData}, {CMAC} — literal markers the NXP SDM engine substitutes
+  //                        on-card at tap time; Vera passes them through
+  //                        verbatim.
+  //
+  // Nullable so partial program definitions (name + rules only) still work;
+  // callers fall back to Vera-wide defaults via config.
+  preActivationNdefUrlTemplate  String?
+  postActivationNdefUrlTemplate String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cards Card[]
+}
+
+// ---------------------------------------------------------------------------
 // Cards
 // ---------------------------------------------------------------------------
 
 enum CardStatus {
-  BLANK
-  ACTIVATED
+  BLANK // placeholder — JCOP not yet personalised (rare in prototype)
+  PERSONALISED // SDM keys + applets written; awaiting first cardholder tap
+  ACTIVATED // SUN-tap verified + passkey registered against the card
   SUSPENDED
   REVOKED
 }
 
 model Card {
-  id             String     @id @default(cuid())
-  // PICC UID hex (7 bytes = 14 hex chars).  Schema-compatible with New T4T.
-  cardIdentifier String     @unique
-  status         CardStatus @default(BLANK)
+  id      String     @id @default(cuid())
+  // Opaque URL slug embedded in the SDM-emitted URL path
+  // (`/activate/:cardRef?e=...&m=...`).  Generated server-side at
+  // `POST /api/cards/register` time; not derived from any card-side material.
+  cardRef String     @unique
+  status  CardStatus @default(PERSONALISED)
+
+  // --- PICC UID (NEVER plaintext on any HTTP boundary) ---------------------
+  // AES-256-GCM ciphertext of the 7-byte PICC UID.  Decrypt is gated by the
+  // SUN verify path only — the UID never leaves the backend in cleartext.
+  uidEncrypted   String
+  // Deterministic HMAC-SHA256(UID_FP_KEY, uid) — lets us look the card up by
+  // UID after PICC decryption without ever storing plaintext UID.  Unique so
+  // a duplicate card insert from the provisioning-agent fails loudly.
+  uidFingerprint String  @unique
+  // JCOP-side serial from the data-prep package (e.g. "JCOP5_00A1B2C3").
+  // Useful for audit; non-secret, but still optional since not every card
+  // batch will surface it.
+  chipSerial     String?
+
+  // --- SDM keys (NXP AN12196 / AN14683) ------------------------------------
+  // AES-128 keys written into the card during personalisation.  Both kept
+  // ciphertext-at-rest under the same vault key version.  `metaRead` decrypts
+  // PICC; `fileRead` is the master from which per-tap session keys derive.
+  sdmMetaReadKeyEncrypted String
+  sdmFileReadKeyEncrypted String
+  keyVersion              Int // VaultEncryptionKey.version used above
+
+  // Monotonic SDM read counter.  Each successful SUN-tap must present a
+  // counter strictly greater than this; the verify path advances atomically
+  // via `updateMany where lastReadCounter < newCounter`.  Replay defence.
+  lastReadCounter Int @default(0)
+
+  // --- Provisioning provenance --------------------------------------------
+  // FK → Program.id.  Null-safe so dev cards and the prototype's
+  // "Create blank card" admin flow keep working without a seeded program;
+  // createTransaction falls back to DEFAULT_TIER_RULES in that case.
+  programId String?
+  program   Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+  batchId   String? // e.g. "batch_2026Q2_001" — Palisade perso batch
 
   // Linked vault entry (one card = one card in the vault, 1:1 once vaulted).
+  // Always populated by the provisioning-agent path; nullable for the rare
+  // admin-only flows that may exist in dev/test.
   vaultEntryId String?     @unique
   vaultEntry   VaultEntry? @relation(fields: [vaultEntryId], references: [id])
 
   // ATC (application transaction counter) for OBO ARQC generation.  Monotonic.
   atc Int @default(0)
 
-  credentials  WebAuthnCredential[]
-  transactions Transaction[]
+  credentials        WebAuthnCredential[]
+  transactions       Transaction[]
+  activationSessions ActivationSession[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// Short-lived, single-use server-side session minted when the cardholder taps
+// their card and the SUN URL passes verification.  The session id IS the
+// opaque token handed to the frontend (`/activate?session=<id>`); the
+// frontend uses it as the only handle for the WebAuthn registration ceremony
+// — no card identifiers or PII are exposed to the page.
+model ActivationSession {
+  id                  String    @id @default(cuid())
+  cardId              String
+  card                Card      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  // 60s TTL — the user has to complete WebAuthn registration in that window.
+  expiresAt           DateTime
+  consumedAt          DateTime?
+  consumedDeviceLabel String?
+  // WebAuthn registration challenge bound to this session.  Set when the
+  // browser calls .../begin; verified + cleared when it calls .../finish.
+  // Null between sessions and after consumption.
+  challenge           String?   @unique
+  // Which SDM read counter opened this session (audit + correlation).
+  readCounter         Int
+  createdIp           String?
+  createdUa           String?
+  createdAt           DateTime  @default(now())
+
+  @@index([cardId])
+  @@index([expiresAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -62,8 +196,8 @@ model Card {
 model VaultEncryptionKey {
   id               String    @id @default(cuid())
   version          Int       @unique
-  // Wrapped data-encryption key. For v0 keys live in env; blob is the wrapped
-  // form we would store if using KMS. Present for rotation machinery.
+  // Wrapped data-encryption key.  For v0 keys live in env; blob is the
+  // wrapped form we would store if using KMS.  Present for rotation machinery.
   encryptedDekBlob String
   createdAt        DateTime  @default(now())
   retiredAt        DateTime?
@@ -72,23 +206,23 @@ model VaultEncryptionKey {
 model VaultEntry {
   id String @id @default(cuid())
 
-  // --- plaintext metadata (safe for display, never needs decrypt) -----------
+  // --- plaintext metadata (safe for display, never needs decrypt) ----------
   panLast4       String
   panBin         String // first 6 of PAN
   cardholderName String
   panExpiryMonth String
   panExpiryYear  String
 
-  // --- ciphertext -----------------------------------------------------------
+  // --- ciphertext ----------------------------------------------------------
   // AES-256-GCM ciphertext of the full PAN (+ CVC if present).  The payload
   // format is versioned by keyVersion.
   encryptedPan String // base64 of iv||ciphertext||tag (JSON for multi-field)
   keyVersion   Int
 
-  // --- deterministic fingerprint for dedup (HMAC-SHA256 of normalised PAN) --
+  // --- deterministic fingerprint for dedup (HMAC-SHA256 of normalised PAN) -
   panFingerprint String @unique
 
-  // --- card back-reference --------------------------------------------------
+  // --- card back-reference -------------------------------------------------
   card Card?
 
   createdAt DateTime @default(now())
@@ -102,24 +236,24 @@ model VaultEntry {
 }
 
 model RetrievalToken {
-  id       String @id @default(cuid())
-  // Opaque token returned to the caller. nanoid(32).
-  token    String @unique
+  id          String   @id @default(cuid())
+  // Opaque token returned to the caller.  nanoid(32).
+  token       String   @unique
   // Single-use guard.
-  used     Boolean @default(false)
+  used        Boolean  @default(false)
   // Bound to an intended amount/currency so a stolen token can't be redirected.
-  amount   Int
-  currency String
+  amount      Int
+  currency    String
   // Expiry (typically createdAt + 60s).
-  expiresAt DateTime
+  expiresAt   DateTime
   // Creator (for audit).
-  purpose  String
+  purpose     String
   createdByIp String?
 
   vaultEntryId String
   vaultEntry   VaultEntry @relation(fields: [vaultEntryId], references: [id], onDelete: Cascade)
 
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   usedAt    DateTime?
 
   accessLogs VaultAccessLog[]
@@ -143,27 +277,28 @@ enum VaultEventResult {
 }
 
 model VaultAccessLog {
-  id               String           @id @default(cuid())
-  eventType        VaultEventType
-  result           VaultEventResult
-  // Who/what initiated the event (e.g. "admin", "transaction:<rlid>", "provider:stripe").
-  actor            String
+  id           String           @id @default(cuid())
+  eventType    VaultEventType
+  result       VaultEventResult
+  // Who/what initiated the event (e.g. "admin", "transaction:<rlid>",
+  // "provider:stripe", "provisioning-agent").
+  actor        String
   // Why (free-form, e.g. "admin store", "payment orchestration step 5").
-  purpose          String
-  ipAddress        String?
-  userAgent        String?
-  errorMessage     String?
+  purpose      String
+  ipAddress    String?
+  userAgent    String?
+  errorMessage String?
 
-  vaultEntryId     String?
-  vaultEntry       VaultEntry? @relation(fields: [vaultEntryId], references: [id], onDelete: SetNull)
+  vaultEntryId String?
+  vaultEntry   VaultEntry? @relation(fields: [vaultEntryId], references: [id], onDelete: SetNull)
 
   retrievalTokenId String?
   retrievalToken   RetrievalToken? @relation(fields: [retrievalTokenId], references: [id], onDelete: SetNull)
 
-  transactionId    String?
-  transaction      Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
 
-  createdAt        DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@index([createdAt])
   @@index([eventType])
@@ -175,7 +310,7 @@ model VaultAccessLog {
 // ---------------------------------------------------------------------------
 
 enum CredentialKind {
-  PLATFORM       // Face ID / Touch ID / Windows Hello  — Tier 1/3
+  PLATFORM // Face ID / Touch ID / Windows Hello  — Tier 1/3
   CROSS_PLATFORM // NFC card tap (CTAP1 on Android)     — Tier 2
 }
 
@@ -203,20 +338,22 @@ model WebAuthnCredential {
   cardId String
   card   Card   @relation(fields: [cardId], references: [id], onDelete: Cascade)
 
-  createdAt DateTime @default(now())
+  createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
 
   @@index([cardId])
 }
 
 model RegistrationChallenge {
-  id        String   @id @default(cuid())
-  challenge String   @unique
-  // The card the challenge was issued for (userHandle = card.cardIdentifier).
+  id        String         @id @default(cuid())
+  challenge String         @unique
+  // The card the challenge was issued for.  userHandle / userLabel are
+  // derived server-side from the card's opaque cuid (see beginRegistration);
+  // the PICC UID never appears in any WebAuthn payload.
   cardId    String
   kind      CredentialKind
   expiresAt DateTime
-  createdAt DateTime @default(now())
+  createdAt DateTime       @default(now())
 
   @@index([expiresAt])
 }
@@ -231,7 +368,7 @@ enum TransactionStatus {
   AUTHN_COMPLETE
   ARQC_VALID
   VAULT_RETRIEVED
-  STRIPE_CHARGED    // provider-agnostic despite the name; kept for log clarity
+  STRIPE_CHARGED // provider-agnostic despite the name; kept for log clarity
   COMPLETED
   FAILED
   EXPIRED
@@ -252,14 +389,20 @@ model Transaction {
   cardId String
   card   Card   @relation(fields: [cardId], references: [id])
 
-  amount      Int    // minor units (cents)
-  currency    String @default("USD")
-  merchantRef String
+  amount       Int // minor units (cents)
+  currency     String @default("USD")
+  merchantRef  String
   merchantName String @default("Demo Merchant")
 
-  status    TransactionStatus @default(PENDING)
-  tier      Tier
-  actualTier Tier?            // which ceremony actually completed
+  status     TransactionStatus @default(PENDING)
+  tier       Tier
+  actualTier Tier? // which ceremony actually completed
+
+  // Credential kinds acceptable for this transaction, computed from the
+  // program's tier rules + amount at create time.  Persisted so auth verify
+  // enforces the same set that was advertised at /authenticate/options, even
+  // if rules change mid-flight.  Non-empty by construction.
+  allowedCredentialKinds CredentialKind[]
 
   // Server-side bound WebAuthn challenge (32 random bytes, base64url).
   challengeNonce String @unique
@@ -273,14 +416,14 @@ model Transaction {
   providerTxnId           String?
 
   // OBO ARQC that we generated + self-validated, stored for audit.
-  arqc String?
+  arqc    String?
   atcUsed Int?
 
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  completedAt DateTime?
-  failedAt    DateTime?
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  completedAt   DateTime?
+  failedAt      DateTime?
   failureReason String?
 
   accessLogs VaultAccessLog[]

@@ -7,23 +7,6 @@ import { detectDevice, type Device } from '../utils/device';
 import { authenticate, registerCredential, type CredentialKind } from '../utils/webauthn';
 import PaymentStatus from '../components/PaymentStatus';
 
-// -----------------------------------------------------------------------------
-// Customer payment page.  Reached via QR scan (desktop → phone) or redirect
-// (merchant page on mobile).
-//
-// Flow:
-//   1. Fetch the transaction by RLID, render summary + status.
-//   2. Fetch the card's credentials; decide which ceremonies this device
-//      supports based on tier + platform.
-//   3. If no credential exists for the chosen ceremony, run inline
-//      registration first (first-time-on-this-device fallback).
-//   4. On "Confirm & Pay" → startAuthentication → POST /authenticate/verify.
-//   5. Backend runs post-auth orchestration; we stream SSE events live.
-//
-// All WebAuthn goes through @simplewebauthn/browser v10 via utils/webauthn.ts
-// — no hand-rolled base64url conversion (Android Chrome NFC bug).
-// -----------------------------------------------------------------------------
-
 interface Transaction {
   id: string;
   rlid: string;
@@ -40,16 +23,8 @@ interface Transaction {
 
 interface CardSummary {
   id: string;
-  cardIdentifier: string;
-  status: string;
-  vaultEntry?: { panLast4: string; panBin: string; cardholderName: string } | null;
-  credentials: {
-    id: string;
-    kind: CredentialKind;
-    deviceName: string | null;
-    createdAt: string;
-    lastUsedAt: string | null;
-  }[];
+  vaultEntry: { panLast4: string } | null;
+  credentials: { kind: CredentialKind }[];
 }
 
 /**
@@ -66,7 +41,6 @@ function preferredKind(
     if (device === 'android') return 'CROSS_PLATFORM';
     return null; // iOS Safari + desktop can't tap an NFC card through a browser reliably
   }
-  // Tiers 1 and 3 — platform biometric.  Works on all three device classes.
   return 'PLATFORM';
 }
 
@@ -80,18 +54,17 @@ export default function CustomerPayment() {
 
   const device = useMemo(detectDevice, []);
 
-  // Load the transaction + the card's credentials in parallel.  In production
-  // the card lookup would be its own endpoint scoped by RLID so unrelated card
-  // metadata isn't leaked to the customer device — fine for the demo.
+  // Both endpoints are scoped to the RLID — holding it is the only capability,
+  // and the customer page never sees card metadata for any other card.
   const load = useCallback(async () => {
     if (!rlid) return;
     try {
-      const [t, allCards] = await Promise.all([
+      const [t, c] = await Promise.all([
         api.get<Transaction>(`/transactions/${rlid}`),
-        api.get<CardSummary[]>('/vault/cards'),
+        api.get<CardSummary>(`/transactions/${rlid}/card`),
       ]);
       setTxn(t);
-      setCard(allCards.find((x) => x.id === t.cardId) ?? null);
+      setCard(c);
     } catch (e) {
       setLoadErr(errorMsg(e));
     }
@@ -115,10 +88,9 @@ export default function CustomerPayment() {
       await registerCredential({
         cardId: card.id,
         kind: preferred,
-        userName: card.vaultEntry?.cardholderName ?? 'Cardholder',
         deviceName: preferredDeviceName(device),
       });
-      await load(); // refresh credentials
+      await load();
     } catch (e) {
       setAuthErr(errorMsg(e));
     } finally {
@@ -132,7 +104,6 @@ export default function CustomerPayment() {
     setAuthErr(null);
     try {
       await authenticate({ rlid: txn.rlid, kinds: [preferred] });
-      // Orchestration happens server-side; SSE drives the UI from here.
     } catch (e) {
       setAuthErr(errorMsg(e));
     } finally {

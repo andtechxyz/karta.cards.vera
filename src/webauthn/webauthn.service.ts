@@ -6,10 +6,11 @@ import {
 } from '@simplewebauthn/server';
 import type {
   AuthenticationResponseJSON,
+  AuthenticatorTransportFuture,
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
-} from '@simplewebauthn/server';
+} from '@simplewebauthn/types';
 import { CredentialKind } from '@prisma/client';
 import { getConfig } from '../config.js';
 import { prisma } from '../db/prisma.js';
@@ -30,7 +31,6 @@ import {
 export interface BeginRegistrationInput {
   cardId: string;
   kind: CredentialKind;
-  userName: string;
 }
 
 export async function beginRegistration(
@@ -48,9 +48,12 @@ export async function beginRegistration(
     .filter((c) => c.kind === input.kind)
     .map((c) => c.credentialId);
 
+  // userHandle and userLabel are derived server-side from the Card's internal
+  // cuid.  The PICC UID is NOT used here — it lives only as ciphertext at
+  // rest and must never appear in any payload sent to the browser.
   const builderInput = {
-    cardIdentifier: card.cardIdentifier,
-    userName: input.userName,
+    userHandle: card.id,
+    userLabel: `card_${card.id.slice(0, 8)}`,
     excludeCredentialIds,
   };
   const opts =
@@ -115,8 +118,10 @@ export async function finishRegistration(input: FinishRegistrationInput) {
   }
 
   const info = verification.registrationInfo;
-  const credentialId = Buffer.from(info.credential.id).toString('base64url');
-  const publicKey = Buffer.from(info.credential.publicKey).toString('base64url');
+  // @simplewebauthn/server v10: credentialID is already a Base64URLString;
+  // credentialPublicKey is a raw Uint8Array we re-encode for storage.
+  const credentialId = info.credentialID;
+  const publicKey = Buffer.from(info.credentialPublicKey).toString('base64url');
 
   const transports =
     input.response.response?.transports ??
@@ -128,7 +133,7 @@ export async function finishRegistration(input: FinishRegistrationInput) {
     data: {
       credentialId,
       publicKey,
-      counter: BigInt(info.credential.counter),
+      counter: BigInt(info.counter),
       kind: challengeRow.kind,
       transports,
       deviceName: input.deviceName,
@@ -185,11 +190,20 @@ export async function beginAuthentication(
 export interface FinishAuthenticationInput {
   response: AuthenticationResponseJSON;
   expectedChallenge: string;
+  /**
+   * Credential kinds acceptable for this authentication.  When supplied, a
+   * credential whose kind is not in the set is rejected before any
+   * cryptographic verification runs — keeps out-of-policy assertions (e.g. a
+   * PLATFORM credential presented for a CROSS_PLATFORM-only transaction)
+   * from being silently accepted.
+   */
+  allowedKinds?: CredentialKind[];
 }
 
 export interface FinishAuthenticationResult {
   credentialId: string;
   cardId: string;
+  kind: CredentialKind;
   newCounter: bigint;
 }
 
@@ -206,16 +220,23 @@ export async function finishAuthentication(
     throw notFound('credential_not_found', 'Credential not recognised');
   }
 
+  if (input.allowedKinds && !input.allowedKinds.includes(credential.kind)) {
+    throw unauthorized(
+      'credential_kind_not_allowed',
+      `Credential kind ${credential.kind} is not acceptable for this transaction`,
+    );
+  }
+
   const verification = await verifyAuthenticationResponse({
     response: input.response,
     expectedChallenge: input.expectedChallenge,
     expectedOrigin: config.WEBAUTHN_ORIGIN,
     expectedRPID: config.WEBAUTHN_RP_ID,
-    credential: {
-      id: credential.credentialId,
-      publicKey: Buffer.from(credential.publicKey, 'base64url'),
+    authenticator: {
+      credentialID: credential.credentialId,
+      credentialPublicKey: Buffer.from(credential.publicKey, 'base64url'),
       counter: Number(credential.counter),
-      transports: credential.transports as never,
+      transports: credential.transports as AuthenticatorTransportFuture[],
     },
     // NFC cards don't always bump the counter reliably — tolerate sig_count 0.
     requireUserVerification: false,
@@ -234,6 +255,7 @@ export async function finishAuthentication(
   return {
     credentialId: credential.credentialId,
     cardId: credential.cardId,
+    kind: credential.kind,
     newCounter,
   };
 }

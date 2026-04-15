@@ -25,3 +25,10 @@ export function deviceNameGuess(): string {
   if (/Windows/.test(ua)) return 'Windows PC';
   return 'Device';
 }
+
+/** Per-platform copy for biometric prompts (Face ID vs fingerprint vs Hello). */
+export function biometricHint(d: Device): string {
+  if (d === 'ios') return 'Face ID / Touch ID';
+  if (d === 'android') return 'fingerprint or face unlock';
+  return 'Touch ID / Windows Hello';
+}

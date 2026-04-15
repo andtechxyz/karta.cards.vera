@@ -5,8 +5,11 @@ import { validateBody } from '../middleware/validate.js';
 import {
   createTransaction,
   getTransactionByRlid,
+  getTransactionCardSummary,
   listTransactions,
+  toTransactionDto,
 } from '../transactions/index.js';
+import { currencySchema } from '../programs/index.js';
 import { publish } from '../realtime/index.js';
 import { getConfig } from '../config.js';
 
@@ -15,7 +18,7 @@ const router: Router = Router();
 const createSchema = z.object({
   cardId: z.string().min(1),
   amount: z.number().int().positive(),
-  currency: z.string().min(3).max(8).default('USD'),
+  currency: currencySchema.default('AUD'),
   merchantRef: z.string().min(1).max(128),
   merchantName: z.string().min(1).max(128).optional(),
 });
@@ -26,44 +29,25 @@ router.post('/', validateBody(createSchema), async (req, res) => {
     amount: txn.amount,
     currency: txn.currency,
     tier: txn.tier,
+    allowedCredentialKinds: txn.allowedCredentialKinds,
     merchantName: txn.merchantName,
     expiresAt: txn.expiresAt,
   });
-  res.status(201).json({
-    id: txn.id,
-    rlid: txn.rlid,
-    status: txn.status,
-    tier: txn.tier,
-    amount: txn.amount,
-    currency: txn.currency,
-    merchantRef: txn.merchantRef,
-    merchantName: txn.merchantName,
-    challengeNonce: txn.challengeNonce,
-    expiresAt: txn.expiresAt,
-  });
+  res.status(201).json(toTransactionDto(txn));
 });
 
 router.get('/:rlid', async (req, res) => {
-  const txn = await getTransactionByRlid(req.params.rlid);
-  res.json({
-    id: txn.id,
-    rlid: txn.rlid,
-    status: txn.status,
-    tier: txn.tier,
-    actualTier: txn.actualTier,
-    amount: txn.amount,
-    currency: txn.currency,
-    merchantRef: txn.merchantRef,
-    merchantName: txn.merchantName,
-    challengeNonce: txn.challengeNonce,
-    expiresAt: txn.expiresAt,
-    cardId: txn.cardId,
-  });
+  res.json(toTransactionDto(await getTransactionByRlid(req.params.rlid)));
+});
+
+// Card summary scoped to a single RLID — feeds the customer page without
+// leaking any other card metadata.  Holding the RLID is the only capability.
+router.get('/:rlid/card', async (req, res) => {
+  res.json(await getTransactionCardSummary(req.params.rlid));
 });
 
 router.post('/:rlid/qr', async (req, res) => {
   const txn = await getTransactionByRlid(req.params.rlid);
-  // The QR encodes the full customer-facing URL at /pay/{rlid} on the RP origin.
   const origin = getConfig().WEBAUTHN_ORIGIN;
   const url = `${origin}/pay/${txn.rlid}`;
   const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 320 });

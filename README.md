@@ -7,20 +7,33 @@ against `https://pay.karta.cards` via Cloudflare Tunnel.
 ## Architecture at a glance
 
 ```
-Browser (desktop)  ──▶  /           MerchantCheckout: cart, Pay with Palisade, QR
-                                 │
-                                 ▼  create /api/transactions  (cardId, amount)
-Browser (mobile)   ──▶  /pay/{rlid}  CustomerPayment: summary, Confirm & Pay
-                                 │
-                                 ▼  /api/auth/authenticate/verify
-Backend (Node + Express + Prisma)
-    ├── webauthn/      @simplewebauthn — CTAP1 for NFC, platform for Face ID
-    ├── orchestration/ post-auth.ts — the riskiest function: ARQC → token → tokenise → charge
-    ├── arqc/          BIN-derived OBO cryptogram — no per-card secrets
-    ├── vault/         tokenise, fingerprint dedup, 60s retrieval tokens, audit, proxy
-    ├── providers/     PaymentProvider interface — Stripe + Mock in the box
-    ├── transactions/  state machine, tier determination
-    └── realtime/      SSE bus with 15s heartbeat + late-subscriber replay
+Card lifecycle
+   Palisade data-prep ──▶ provisioning-agent ──▶ POST /api/cards/register
+                                                  (vaults PAN + creates Card in one txn)
+   Cardholder taps    ──▶ NDEF URL fires       ──▶ GET /activate/:cardRef?e=...&m=...
+                                                  (SUN verify → mint 60s ActivationSession
+                                                   → 302 /activate?session=<opaque-token>)
+   Second tap on phone ─▶ /api/activation/sessions/:token/{begin,finish}
+                                                  (atomic credential + ACTIVATED + consume)
+
+Payment flow
+   Browser (desktop)  ──▶  /           MerchantCheckout: cart, Pay with Palisade, QR
+                                    │
+                                    ▼  create /api/transactions  (cardId, amount)
+   Browser (mobile)   ──▶  /pay/{rlid}  CustomerPayment: summary, Confirm & Pay
+                                    │
+                                    ▼  /api/auth/authenticate/verify
+   Backend (Node + Express + Prisma)
+       ├── sun/           NXP AN14683 PICC decrypt + CMAC verify + monotonic counter
+       ├── cards/         POST /api/cards/register entry point for provisioning-agent
+       ├── activation/    SUN session loader + WebAuthn begin/finish (CROSS_PLATFORM only)
+       ├── webauthn/      @simplewebauthn — CTAP1 for NFC, platform for Face ID
+       ├── orchestration/ post-auth.ts — the riskiest function: ARQC → token → tokenise → charge
+       ├── arqc/          BIN-derived OBO cryptogram — no per-card secrets
+       ├── vault/         tokenise, fingerprint dedup, 60s retrieval tokens, audit, proxy
+       ├── providers/     PaymentProvider interface — Stripe + Mock in the box
+       ├── transactions/  state machine, tier determination
+       └── realtime/      SSE bus with 15s heartbeat + late-subscriber replay
 ```
 
 Everything runs off a single Postgres database. See
@@ -92,13 +105,39 @@ origin.
 
 ## Manual smoke test
 
-1. `docker compose up -d && npm run dev && cloudflared tunnel run vera-pay`
-2. Phone → `https://pay.karta.cards/admin` → Cards → **Create blank card**
-3. Vault tab → enter `4242424242424242` / 12 / 28 / 123 / "Test User" → vault succeeds
-4. WebAuthn tab → pick the card → **Register passkey** (Platform) → Face ID
-5. Desktop → `https://pay.karta.cards/` → cart total appears → select the card → **Pay with Palisade**
+Admin is read-only for cards. Card creation goes through the provisioning-
+agent path; activation is entirely cardholder-driven via SUN-tap. There is
+no "create blank card" or "register passkey" button anymore.
+
+```bash
+# 1. Bring everything up
+docker compose up -d && npm run dev & cloudflared tunnel run vera-pay
+
+# 2. Register a card via the provisioning-agent endpoint
+#    (in production this is called by Palisade's perso pipeline; for
+#    development we curl it directly with a representative payload)
+curl -X POST https://pay.karta.cards/api/cards/register \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "cardRef": "test-001",
+    "uid": "04A3B2C1D2E380",
+    "sdmMetaReadKey": "00112233445566778899aabbccddeeff",
+    "sdmFileReadKey": "ffeeddccbbaa99887766554433221100",
+    "card": {
+      "pan": "4242424242424242",
+      "expiryMonth": "12",
+      "expiryYear": "28",
+      "cvc": "123",
+      "cardholderName": "Test User"
+    }
+  }'
+```
+
+3. Cardholder taps the physical card → NDEF URL hits `/activate/:cardRef?e=...&m=...` → server verifies SUN → 302 to `/activate?session=<token>`
+4. Frontend auto-fires WebAuthn registration on Android Chrome → cardholder taps card again → CROSS_PLATFORM credential stored, card flips to `ACTIVATED`
+5. Desktop → `https://pay.karta.cards/` → cart total appears → select the activated card → **Pay with Palisade**
 6. QR appears with countdown
-7. Scan QR on phone → `/pay/{rlid}` → amount + merchant shown → **Confirm & Pay** → Face ID
+7. Scan QR on phone → `/pay/{rlid}` → amount + merchant shown → **Confirm & Pay** → Face ID (Tier 1/3) or NFC tap (Tier 2)
 8. Progress ticks through: authn ✓ → ARQC ✓ → vault ✓ → provider ✓ → charged ✓ → **Complete**
 9. Desktop SSE fires → "Payment complete"
 10. Admin → Transactions → new row with `status=COMPLETED`
@@ -107,7 +146,7 @@ origin.
 ### Tier 2 smoke test (Android Chrome only)
 
 1. Set the cart total over $50 so it falls into Tier 2.
-2. In Admin → WebAuthn, register a credential of kind **NFC (CTAP1 — Android Chrome)** against the card.
+2. The SUN-tap activation already registered a CROSS_PLATFORM credential — no extra registration step needed.
 3. On Android Chrome, open `/pay/{rlid}` and tap the Palisade card against the back of the phone.
 4. The CTAP1 config in `src/webauthn/config.ts` is verbatim from New T4T — see the plan doc's "WebAuthn/NFC requirements" section before changing it.
 
@@ -117,30 +156,52 @@ origin.
 2. Restart `npm run dev`.
 3. Repeat smoke test — Stripe test-mode dashboard should show a succeeded PaymentIntent per transaction.
 
-### Unit-level spot checks
+### Unit tests
 
-Before the full flow, these are the cheap ones to validate in isolation:
+```bash
+npm test            # vitest run — 60+ unit tests, ~200ms
+```
 
-- Luhn: `luhnValid('4242424242424242')` ✓, `luhnValid('4242424242424241')` ✗
-- Vault round-trip: `storeCard` → `mintRetrievalToken` → `consumeRetrievalToken`, PAN matches
-- Vault dedup: vaulting the same PAN twice with `onDuplicate=reuse` returns the same vaultEntryId
-- Vault proxy: `forwardViaVault` with a destination of `httpbin.org/post` → outbound body has PAN substituted, token not reusable
-- ARQC symmetry: `generateArqc(x) === generateArqc(x)`; mutate amount → `validateArqc` fails
-- Retrieval-token race: two concurrent `consumeRetrievalToken` calls → exactly one succeeds
-- Transaction expiry: create, push `expiresAt` into the past, `getTransactionForAuthOrThrow` rejects
-- SSE: subscribe after an event has fired → receive the replay on connect
+Coverage today (no DB / no network — pure crypto + in-process pub/sub):
+
+- **SUN**: AES-CMAC against NIST SP 800-38B vectors, PICC decrypt against a
+  known card vector, end-to-end URL verifier with synthesized PICC + MAC
+  (mutation tests for tampered MAC, wrong key, missing `&m=`)
+- **ARQC**: generate/validate symmetry; asymmetry under amount / ATC /
+  cardId / BIN / currency / merchantRef / nonce mutations; malformed
+  candidate handling
+- **HKDF**: RFC 5869 §A.1 vector
+- **Vault encryption**: AES-256-GCM round-trip, random-IV non-determinism,
+  tag-tamper rejection, version-byte rejection
+- **Vault fingerprint**: deterministic, normalises spaces/dashes, distinct
+  for distinct PANs
+- **Luhn**: canonical Stripe PAN ✓, single-digit corruption ✗
+- **Template substitution**: known placeholders, fail-closed on unknown,
+  no whitespace tolerance
+- **SSE bus**: late-subscriber replay, header set (incl. Cloudflare
+  `X-Accel-Buffering: no`), per-RLID isolation, `forget()` drops history
+
+Things that need a Postgres test database (not yet wired): vault dedup,
+retrieval-token concurrent-consume race, transaction expiry, audit log
+shape, activation session lifecycle.
 
 ## Relationship to New T4T and Palisade
 
-Two sibling projects live under `~/Documents/Claude Code/`:
+Two sibling projects live under `~/Documents/Claude Code/` (mirrored into
+`external/` here as read-only references):
 
-- **`New T4T/`** — the activation flow. Owns SUN verification and the
-  canonical FIDO2 credential store for each card. Vera **does not** call
-  into New T4T's API for the prototype; it runs its own WebAuthn RP. But
-  schemas align: `Card.cardIdentifier` holds the PICC UID hex, the same
-  value New T4T stores as `uid`.
-- **`Palisade/`** — the card issuance / personalisation platform. Separate
-  stack, separate purpose. No code reuse.
+- **`New T4T/`** — the original SUN-tap activation prototype (Python + Next.js).
+  Vera's `src/sun/` is a 1:1 port of `palisade-sun`'s `sun_validator.py` and
+  `key_manager.py`, validated against the same NIST CMAC vectors and
+  real-card PICC test vector. Vera runs its own WebAuthn RP — it does not
+  call into New T4T's API for the prototype.
+- **`Palisade/`** — the card issuance / personalisation platform. Vera's
+  `POST /api/cards/register` is the ingest endpoint Palisade's
+  provisioning-agent calls after data-prep + perso. Schemas align on the
+  PICC UID, but in Vera the UID lives only as ciphertext (`uidEncrypted`)
+  + a deterministic HMAC fingerprint (`uidFingerprint`) — never plaintext
+  on any HTTP boundary or in admin UI. The opaque public handle is
+  `cardRef`.
 
 To integrate later — so a card registered in New T4T can authenticate for a
 payment in Vera — both services would need to run on the same WebAuthn
@@ -170,6 +231,10 @@ before touching `src/webauthn/config.ts`.
 - Plan: `/Users/danderson/.claude/plans/tingly-imagining-sketch.md`
 - Memory: `/Users/danderson/.claude/projects/-Users-danderson-Vera/memory/`
 - Schema: `prisma/schema.prisma`
+- SUN verifier (do not improvise — mirrors palisade-sun): `src/sun/`
+- Activation flow (begin/finish bound to opaque session token): `src/activation/`
+- Provisioning ingest: `src/cards/register.service.ts` + `src/routes/cards.routes.ts`
+- SUN-tap landing: `src/routes/sun-tap.routes.ts` (mounted at `/`, not `/api`)
 - Orchestration entry point: `src/orchestration/post-auth.ts`
 - Tiering: `src/transactions/tier.ts`
 - WebAuthn config: `src/webauthn/config.ts` (CTAP1-verbatim — handle with care)

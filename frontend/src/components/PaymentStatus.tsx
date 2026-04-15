@@ -1,4 +1,4 @@
-import { isTerminalEvent, type SseEvent } from '../utils/sse';
+import { isTerminalEvent, type SseEvent, type SseEventType } from '../utils/sse';
 
 // -----------------------------------------------------------------------------
 // Progress list used by both the merchant desktop page and the customer phone
@@ -6,7 +6,7 @@ import { isTerminalEvent, type SseEvent } from '../utils/sse';
 // with terminal states highlighted.
 // -----------------------------------------------------------------------------
 
-const STEPS: { type: string; label: string }[] = [
+const STEPS: { type: SseEventType; label: string }[] = [
   { type: 'transaction_created', label: 'Transaction created' },
   { type: 'authn_started', label: 'Authentication started' },
   { type: 'authn_complete', label: 'Authentication verified' },

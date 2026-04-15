@@ -27,7 +27,7 @@ export class StripeProvider implements PaymentProvider {
         'PAYMENT_PROVIDER=stripe but STRIPE_SECRET_KEY is not set — fix .env and restart',
       );
     }
-    this.client = new Stripe(key, { apiVersion: '2024-12-18.acacia' });
+    this.client = new Stripe(key, { apiVersion: '2025-02-24.acacia' });
     return this.client;
   }
 

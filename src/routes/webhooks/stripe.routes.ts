@@ -24,7 +24,7 @@ let stripeClient: Stripe | null = null;
 function getClient(): Stripe {
   if (stripeClient) return stripeClient;
   const key = getConfig().STRIPE_SECRET_KEY ?? 'sk_test_unused';
-  stripeClient = new Stripe(key, { apiVersion: '2024-12-18.acacia' });
+  stripeClient = new Stripe(key, { apiVersion: '2025-02-24.acacia' });
   return stripeClient;
 }
 
@@ -48,10 +48,10 @@ router.post('/stripe', raw({ type: 'application/json', limit: '1mb' }), (req, re
     const event = getClient().webhooks.constructEvent(req.body as Buffer, sig, secret);
     // eslint-disable-next-line no-console
     console.log(`[stripe-webhook] ${event.type}  ${event.id}`);
-    res.status(200).json({ received: true, verified: true, type: event.type });
+    return res.status(200).json({ received: true, verified: true, type: event.type });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    res.status(400).json({ error: 'bad_signature', message: msg });
+    return res.status(400).json({ error: 'bad_signature', message: msg });
   }
 });
 

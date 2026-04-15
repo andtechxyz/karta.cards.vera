@@ -20,12 +20,13 @@ export type CredentialKind = 'PLATFORM' | 'CROSS_PLATFORM';
 export async function registerCredential(input: {
   cardId: string;
   kind: CredentialKind;
-  userName: string;
   deviceName?: string;
 }): Promise<{ id: string; credentialId: string }> {
+  // userHandle / userLabel are derived server-side from the Card's opaque
+  // cuid — the browser must not influence them (would leak PII otherwise).
   const options = await api.post<Parameters<typeof startRegistration>[0]>(
     '/auth/register/options',
-    { cardId: input.cardId, kind: input.kind, userName: input.userName },
+    { cardId: input.cardId, kind: input.kind },
   );
 
   // The library handles ArrayBuffer ↔ base64url conversions internally,
@@ -53,5 +54,30 @@ export async function authenticate(input: {
   return api.post('/auth/authenticate/verify', {
     rlid: input.rlid,
     response: assertion,
+  });
+}
+
+/**
+ * Activation ceremony — runs on the cardholder's phone after the SUN-tap
+ * landed them on /activate?session=<token>.  The session token is the only
+ * handle the page sees; the server resolves it to the underlying card.
+ *
+ * Two browser legs:
+ *   1. /begin → server returns CTAP1 NFC registration options
+ *   2. user taps the FIDO2 applet on the same physical card
+ *   3. /finish → server verifies + atomically activates the card
+ */
+export async function activateWithSession(input: {
+  sessionToken: string;
+  deviceLabel?: string;
+}): Promise<{ credentialId: string; cardActivated: true }> {
+  const path = `/activation/sessions/${encodeURIComponent(input.sessionToken)}`;
+  const options = await api.post<Parameters<typeof startRegistration>[0]>(`${path}/begin`);
+
+  const attResp = await startRegistration(options);
+
+  return api.post(`${path}/finish`, {
+    response: attResp,
+    deviceLabel: input.deviceLabel,
   });
 }

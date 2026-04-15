@@ -11,3 +11,11 @@ coverage/
 frontend/node_modules/
 frontend/dist/
 prisma/migrations/dev.db*
+
+# Incremental-build metadata from tsc / vite
+*.tsbuildinfo
+
+# Bridged sibling projects (symlinks into ~/Documents/Claude Code/{New T4T,Palisade}).
+# Browseable in-place for cross-project context (SUN spec, FIDO2 applet,
+# personalisation flow) but not Vera's source — never commit.
+external/

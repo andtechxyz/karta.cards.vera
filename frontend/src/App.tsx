@@ -2,6 +2,7 @@ import { Routes, Route, Link } from 'react-router-dom';
 import MerchantCheckout from './pages/MerchantCheckout';
 import CustomerPayment from './pages/CustomerPayment';
 import Admin from './pages/Admin';
+import Activate from './pages/Activate';
 
 export default function App() {
   return (
@@ -9,6 +10,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<MerchantCheckout />} />
         <Route path="/pay/:rlid" element={<CustomerPayment />} />
+        <Route path="/activate" element={<Activate />} />
         <Route path="/admin" element={<Admin />} />
         <Route
           path="*"

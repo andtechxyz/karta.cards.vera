@@ -43,8 +43,3 @@ export function getKeyProvider(): KeyProvider {
   if (!cached) cached = new EnvKeyProvider();
   return cached;
 }
-
-/** Test helper. */
-export function _setKeyProvider(p: KeyProvider | null): void {
-  cached = p;
-}

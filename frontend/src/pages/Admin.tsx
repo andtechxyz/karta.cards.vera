@@ -1,32 +1,39 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, errorMsg } from '../utils/api';
 import { formatDate, formatMoney } from '../utils/format';
-import { deviceNameGuess } from '../utils/device';
 import { luhnValid } from '../utils/luhn';
-import { registerCredential, type CredentialKind } from '../utils/webauthn';
+import type { CredentialKind } from '../utils/webauthn';
 
-// -----------------------------------------------------------------------------
-// Admin UI — single page with tab switching, no routing inside.
+// Admin UI — read-only view of cards, vault entries, transactions, and the
+// vault audit tail.
 //
-// Tabs:
-//   - Cards       (list + create BLANK)
-//   - Vault       (manual card entry → tokenise → ACTIVATED)
-//   - WebAuthn    (register platform/NFC passkey against a card)
-//   - Transactions (recent txns, read-only)
-//   - Audit       (VaultAccessLog tail)
-//
-// Everything is HTTP-polling; the Admin page doesn't need SSE.  Low-traffic.
-// -----------------------------------------------------------------------------
+// Cards are NOT created from this page in the production lifecycle —
+// Palisade's provisioning-agent calls POST /api/cards/register after data-
+// prep + perso.  Activation is entirely cardholder-driven: tap the card →
+// SDM URL fires → /activate?session=<token>.  Admin sees the resulting
+// state but cannot mint sessions or links itself.
 
-type TabKey = 'cards' | 'vault' | 'webauthn' | 'transactions' | 'audit';
+type TabKey = 'cards' | 'vault' | 'transactions' | 'audit';
+
+interface ActivationSessionRow {
+  id: string;
+  expiresAt: string;
+  consumedAt: string | null;
+  consumedDeviceLabel: string | null;
+  createdAt: string;
+}
 
 interface Card {
   id: string;
-  cardIdentifier: string;
-  status: 'BLANK' | 'ACTIVATED' | 'SUSPENDED' | 'REVOKED';
+  cardRef: string;
+  status: 'BLANK' | 'PERSONALISED' | 'ACTIVATED' | 'SUSPENDED' | 'REVOKED';
+  chipSerial: string | null;
+  programId: string | null;
+  batchId: string | null;
   createdAt: string;
   vaultEntry?: { id: string; panLast4: string; panBin: string; cardholderName: string } | null;
   credentials: { id: string; kind: CredentialKind; deviceName: string | null; createdAt: string; lastUsedAt: string | null }[];
+  activationSessions: ActivationSessionRow[];
 }
 
 export default function Admin() {
@@ -36,7 +43,7 @@ export default function Admin() {
       <h1>Vera Admin</h1>
       <p className="small">Cards, vault, WebAuthn credentials, transactions, audit.</p>
       <div className="tabs">
-        {(['cards', 'vault', 'webauthn', 'transactions', 'audit'] as const).map((t) => (
+        {(['cards', 'vault', 'transactions', 'audit'] as const).map((t) => (
           <button
             key={t}
             className={`tab ${tab === t ? 'active' : ''}`}
@@ -48,7 +55,6 @@ export default function Admin() {
       </div>
       {tab === 'cards' && <CardsTab />}
       {tab === 'vault' && <VaultTab />}
-      {tab === 'webauthn' && <WebAuthnTab />}
       {tab === 'transactions' && <TransactionsTab />}
       {tab === 'audit' && <AuditTab />}
     </div>
@@ -58,7 +64,6 @@ export default function Admin() {
 const labels: Record<TabKey, string> = {
   cards: 'Cards',
   vault: 'Vault',
-  webauthn: 'WebAuthn',
   transactions: 'Transactions',
   audit: 'Audit',
 };
@@ -66,43 +71,29 @@ const labels: Record<TabKey, string> = {
 // --- Cards tab ---------------------------------------------------------------
 
 function CardsTab() {
-  const { cards, reload, loading } = useCards();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const createCard = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      await api.post('/vault/cards', {});
-      await reload();
-    } catch (e) {
-      setErr(errorMsg(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { cards, loading } = useCards();
 
   return (
     <div className="panel">
-      <div className="row">
-        <h2 style={{ margin: 0 }}>Cards</h2>
-        <button className="btn primary" onClick={createCard} disabled={busy}>
-          {busy ? 'Creating…' : '+ Create blank card'}
-        </button>
-      </div>
-      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+      <h2 style={{ margin: 0 }}>Cards</h2>
+      <p className="small" style={{ marginTop: 8 }}>
+        Cards are registered by Palisade's provisioning-agent (POST /api/cards/register)
+        and activated by the cardholder tapping the physical card. Admin is read-only.
+      </p>
       {loading ? (
         <p className="small">Loading…</p>
       ) : cards.length === 0 ? (
-        <p className="small">No cards yet. Create one to get started.</p>
+        <p className="small">
+          No cards registered yet. POST a Palisade data-prep package to /api/cards/register.
+        </p>
       ) : (
         <table>
           <thead>
             <tr>
-              <th>UID</th>
+              <th>Card ref</th>
               <th>Status</th>
               <th>Vault</th>
+              <th>Activation</th>
               <th>Credentials</th>
               <th>Created</th>
             </tr>
@@ -110,7 +101,7 @@ function CardsTab() {
           <tbody>
             {cards.map((c) => (
               <tr key={c.id}>
-                <td className="mono">{c.cardIdentifier}</td>
+                <td className="mono">{c.cardRef}</td>
                 <td>
                   <span className={`tag ${c.status === 'ACTIVATED' ? 'ok' : ''}`}>
                     {c.status}
@@ -122,6 +113,9 @@ function CardsTab() {
                   ) : (
                     <span className="small">—</span>
                   )}
+                </td>
+                <td>
+                  <ActivationCell card={c} />
                 </td>
                 <td>
                   {c.credentials.length === 0 ? (
@@ -142,6 +136,26 @@ function CardsTab() {
       )}
     </div>
   );
+}
+
+/** Per-row cell rendering activation state from the latest ActivationSession. */
+function ActivationCell({ card }: { card: Card }) {
+  if (card.status === 'ACTIVATED') {
+    const consumed = card.activationSessions.find((a) => a.consumedAt);
+    return (
+      <span className="small">
+        ✓ activated{consumed?.consumedDeviceLabel ? ` on ${consumed.consumedDeviceLabel}` : ''}
+      </span>
+    );
+  }
+  const latest = card.activationSessions[0];
+  if (!latest) {
+    return <span className="small">awaiting first tap</span>;
+  }
+  if (latest.consumedAt) {
+    return <span className="small">tap done — credential pending</span>;
+  }
+  return <span className="small">tap pending</span>;
 }
 
 // --- Vault tab ---------------------------------------------------------------
@@ -199,12 +213,12 @@ function VaultTab() {
         never returned in plaintext to any caller.
       </p>
 
-      <label>Card (blank only)</label>
+      <label>Card (no vault entry yet)</label>
       <select value={cardId} onChange={(e) => setCardId(e.target.value)}>
-        {blankCards.length === 0 && <option value="">No blank cards — create one first</option>}
+        {blankCards.length === 0 && <option value="">No unvaulted cards — register one via /api/cards/register first</option>}
         {blankCards.map((c) => (
           <option key={c.id} value={c.id}>
-            {c.cardIdentifier} ({c.status})
+            {c.cardRef} ({c.status})
           </option>
         ))}
       </select>
@@ -255,124 +269,6 @@ function VaultTab() {
   );
 }
 
-// --- WebAuthn tab ------------------------------------------------------------
-
-function WebAuthnTab() {
-  const { cards, reload } = useCards();
-  const [cardId, setCardId] = useState('');
-  const [kind, setKind] = useState<CredentialKind>('PLATFORM');
-  const [userName, setUserName] = useState('Test User');
-  const [deviceName, setDeviceName] = useState(deviceNameGuess());
-  const [err, setErr] = useState<string | null>(null);
-  const [ok, setOk] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const activatedCards = cards.filter((c) => c.status === 'ACTIVATED');
-
-  useEffect(() => {
-    if (!cardId && activatedCards.length > 0) setCardId(activatedCards[0].id);
-  }, [activatedCards, cardId]);
-
-  const selectedCard = useMemo(
-    () => cards.find((c) => c.id === cardId),
-    [cards, cardId],
-  );
-
-  const register = async () => {
-    setErr(null);
-    setOk(null);
-    if (!cardId) return setErr('Select a card');
-    setBusy(true);
-    try {
-      const r = await registerCredential({ cardId, kind, userName, deviceName });
-      setOk(
-        `Registered ${kind === 'PLATFORM' ? 'platform' : 'NFC'} credential ${r.credentialId.slice(0, 12)}…`,
-      );
-      await reload();
-    } catch (e) {
-      setErr(errorMsg(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Register passkey</h2>
-      <p className="small">
-        Passkeys are device-scoped — register once on each device the customer
-        will authenticate from. NFC credential requires an Android Chrome + a
-        Palisade card.
-      </p>
-
-      <label>Card (activated)</label>
-      <select value={cardId} onChange={(e) => setCardId(e.target.value)}>
-        {activatedCards.length === 0 && (
-          <option value="">No activated cards — vault one first</option>
-        )}
-        {activatedCards.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.cardIdentifier}
-            {c.vaultEntry ? ` — •••• ${c.vaultEntry.panLast4}` : ''}
-          </option>
-        ))}
-      </select>
-
-      <label>Kind</label>
-      <select value={kind} onChange={(e) => setKind(e.target.value as CredentialKind)}>
-        <option value="PLATFORM">Platform (Face ID / Touch ID / Hello)</option>
-        <option value="CROSS_PLATFORM">NFC card (CTAP1 — Android Chrome)</option>
-      </select>
-
-      <label>User name</label>
-      <input value={userName} onChange={(e) => setUserName(e.target.value)} />
-
-      <label>Device name (for display)</label>
-      <input value={deviceName} onChange={(e) => setDeviceName(e.target.value)} />
-
-      <div style={{ marginTop: 14 }}>
-        <button className="btn primary" onClick={register} disabled={busy || !cardId}>
-          {busy ? 'Waiting for ceremony…' : 'Register passkey'}
-        </button>
-      </div>
-      {ok && <p className="tag ok" style={{ marginTop: 12 }}>{ok}</p>}
-      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
-
-      {selectedCard && selectedCard.credentials.length > 0 && (
-        <>
-          <h2 style={{ marginTop: 24 }}>Existing credentials on this card</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Kind</th>
-                <th>Device</th>
-                <th>Created</th>
-                <th>Last used</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedCard.credentials.map((c) => (
-                <tr key={c.id}>
-                  <td>
-                    <span className="tag">
-                      {c.kind === 'PLATFORM' ? 'PLATFORM' : 'NFC'}
-                    </span>
-                  </td>
-                  <td>{c.deviceName ?? <span className="small">—</span>}</td>
-                  <td className="small">{formatDate(c.createdAt)}</td>
-                  <td className="small">
-                    {c.lastUsedAt ? formatDate(c.lastUsedAt) : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-    </div>
-  );
-}
-
 // --- Transactions tab --------------------------------------------------------
 
 interface TxnRow {
@@ -391,7 +287,7 @@ interface TxnRow {
   completedAt: string | null;
   failedAt: string | null;
   failureReason: string | null;
-  card: { id: string; cardIdentifier: string; vaultEntry: { panLast4: string } | null };
+  card: { id: string; cardRef: string; vaultEntry: { panLast4: string } | null };
 }
 
 function TransactionsTab() {
@@ -459,7 +355,7 @@ function TransactionsTab() {
                   {t.card.vaultEntry ? (
                     <span className="mono">•••• {t.card.vaultEntry.panLast4}</span>
                   ) : (
-                    <span className="mono">{t.card.cardIdentifier}</span>
+                    <span className="mono">{t.card.cardRef}</span>
                   )}
                 </td>
                 <td>

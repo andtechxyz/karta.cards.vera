@@ -2,49 +2,50 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../db/prisma.js';
 import { validateBody } from '../../middleware/validate.js';
-import { storeCard, listCards } from '../../vault/index.js';
-import { CardStatus } from '@prisma/client';
+import { storeCard } from '../../vault/index.js';
 import { notFound, badRequest } from '../../middleware/error.js';
 
 const router: Router = Router();
 
-// --- Card lifecycle (admin) ------------------------------------------------
-
-const createCardSchema = z.object({
-  // If omitted, we generate a random 14-hex (7-byte) PICC UID.
-  cardIdentifier: z
-    .string()
-    .regex(/^[0-9a-fA-F]{14}$/)
-    .optional(),
-});
-
-function randomPiccUid(): string {
-  // 7 random bytes, lowercase hex — matches the UID format New T4T stores.
-  const buf = Buffer.alloc(7);
-  for (let i = 0; i < 7; i++) buf[i] = Math.floor(Math.random() * 256);
-  return buf.toString('hex');
-}
-
-router.post('/cards', validateBody(createCardSchema), async (req, res) => {
-  const identifier = req.body.cardIdentifier ?? randomPiccUid();
-  const exists = await prisma.card.findUnique({ where: { cardIdentifier: identifier } });
-  if (exists) throw badRequest('card_exists', 'A card with that identifier already exists');
-
-  const card = await prisma.card.create({
-    data: { cardIdentifier: identifier, status: CardStatus.BLANK },
-  });
-  res.status(201).json(card);
-});
+// --- Cards (admin read-only) -----------------------------------------------
+//
+// Cards are NOT created here.  In the production lifecycle, Palisade's
+// provisioning-agent calls `POST /api/cards/register` after data-prep + perso;
+// in dev / testing, the same endpoint is the only way in.  Admin sees an
+// opaque view (no PICC UID, no SDM key material) — just enough to reason
+// about state, credentials, and the linked vault entry.
 
 router.get('/cards', async (_req, res) => {
   const cards = await prisma.card.findMany({
     orderBy: { createdAt: 'desc' },
-    include: {
+    select: {
+      id: true,
+      cardRef: true,
+      status: true,
+      chipSerial: true,
+      programId: true,
+      batchId: true,
+      createdAt: true,
+      updatedAt: true,
       vaultEntry: {
         select: { id: true, panLast4: true, panBin: true, cardholderName: true },
       },
       credentials: {
         select: { id: true, kind: true, deviceName: true, createdAt: true, lastUsedAt: true },
+      },
+      // Latest in-flight activation session, if any — drives the admin UI's
+      // "tap pending / activated / never tapped" indicator.  Only the most
+      // recent matters; older sessions are either consumed or expired noise.
+      activationSessions: {
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: {
+          id: true,
+          expiresAt: true,
+          consumedAt: true,
+          consumedDeviceLabel: true,
+          createdAt: true,
+        },
       },
     },
   });
@@ -87,17 +88,15 @@ router.post('/store', validateBody(storeSchema), async (req, res) => {
     onDuplicate: bodyOnDup ?? queryOnDup,
   });
 
-  // Link the vault entry to the card and mark card ACTIVATED.
+  // Link the vault entry to the card.  Status stays as-is (typically
+  // PERSONALISED) — the cardholder promotes it to ACTIVATED via the SUN-tap
+  // activation flow, not as a side effect of vaulting.
   await prisma.card.update({
     where: { id: cardId },
-    data: { vaultEntryId: result.vaultEntryId, status: CardStatus.ACTIVATED },
+    data: { vaultEntryId: result.vaultEntryId },
   });
 
   res.status(201).json(result);
-});
-
-router.get('/cards-meta', async (_req, res) => {
-  res.json(await listCards());
 });
 
 export default router;

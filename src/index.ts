@@ -6,8 +6,12 @@ import { errorMiddleware } from './middleware/error.js';
 import { startAuditSubscriber } from './vault/index.js';
 
 import vaultRouter from './routes/vault/index.js';
+import cardsRouter from './routes/cards.routes.js';
+import programsRouter from './routes/programs.routes.js';
 import transactionsRouter from './routes/transactions.routes.js';
 import authRouter from './routes/auth.routes.js';
+import activationRouter from './routes/activation.routes.js';
+import sunTapRouter from './routes/sun-tap.routes.js';
 import paymentRouter from './routes/payment.routes.js';
 import webhooksRouter from './routes/webhooks/index.js';
 
@@ -40,9 +44,16 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.use('/api/vault', vaultRouter);
+app.use('/api/cards', cardsRouter);
+app.use('/api/programs', programsRouter);
 app.use('/api/transactions', transactionsRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/activation', activationRouter);
 app.use('/api/payment', paymentRouter);
+
+// SUN-tap handler — the URL the physical card emits hits the server ROOT
+// (no /api prefix), so mount at top level after API routes are declared.
+app.use('/', sunTapRouter);
 
 app.use(errorMiddleware);
 

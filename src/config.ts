@@ -9,7 +9,8 @@ import { z } from 'zod';
 // imagining-sketch.md, "WebAuthn/NFC requirements".
 // -----------------------------------------------------------------------------
 
-const hexKey = (bytes: number) =>
+/** Zod schema for a fixed-length hex string (`bytes` bytes = `bytes*2` chars). */
+export const hexKey = (bytes: number) =>
   z
     .string()
     .length(bytes * 2, `expected ${bytes} bytes (${bytes * 2} hex chars)`)

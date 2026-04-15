@@ -29,7 +29,7 @@ const CURRENCY = 'USD';
 
 interface Card {
   id: string;
-  cardIdentifier: string;
+  cardRef: string;
   status: string;
   vaultEntry?: { panLast4: string } | null;
 }
@@ -132,7 +132,7 @@ export default function MerchantCheckout() {
             )}
             {cards.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.cardIdentifier}
+                {c.cardRef}
                 {c.vaultEntry ? ` — •••• ${c.vaultEntry.panLast4}` : ''}
               </option>
             ))}

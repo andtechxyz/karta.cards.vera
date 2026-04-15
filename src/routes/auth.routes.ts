@@ -9,7 +9,8 @@ import {
   finishAuthentication,
 } from '../webauthn/index.js';
 import { getTransactionForAuthOrThrow } from '../transactions/index.js';
-import { orchestratePostAuth } from '../orchestration/post-auth.js';
+import { orchestratePostAuth } from '../orchestration/index.js';
+import { badRequest } from '../middleware/error.js';
 
 const router: Router = Router();
 
@@ -18,10 +19,11 @@ const router: Router = Router();
 const beginRegSchema = z.object({
   cardId: z.string().min(1),
   kind: z.nativeEnum(CredentialKind),
-  userName: z.string().min(1).max(128),
 });
 
 router.post('/register/options', validateBody(beginRegSchema), async (req, res) => {
+  // userHandle / userLabel are derived inside beginRegistration from the
+  // Card's opaque cuid — clients cannot influence them.
   const options = await beginRegistration(req.body);
   res.json(options);
 });
@@ -51,16 +53,32 @@ router.post('/register/verify', validateBody(finishRegSchema), async (req, res) 
 
 const beginAuthSchema = z.object({
   rlid: z.string().min(1),
-  /** Optional tier-narrowed credential filter from the customer page. */
+  /**
+   * Client may further narrow the set (e.g. Android offering NFC only even
+   * when PLATFORM is also acceptable).  Server intersects with the
+   * transaction's stored allowedCredentialKinds; it can never widen.
+   */
   kinds: z.array(z.nativeEnum(CredentialKind)).optional(),
 });
 
 router.post('/authenticate/options', validateBody(beginAuthSchema), async (req, res) => {
   const txn = await getTransactionForAuthOrThrow(req.body.rlid);
+  const requested = req.body.kinds;
+  const effective = requested
+    ? txn.allowedCredentialKinds.filter((k) => requested.includes(k))
+    : txn.allowedCredentialKinds;
+  if (effective.length === 0) {
+    // Caller asked for kinds entirely outside the program's policy — surface
+    // rather than silently presenting zero credentials.
+    throw badRequest(
+      'no_allowed_kinds',
+      'Requested credential kinds are not acceptable for this transaction',
+    );
+  }
   const options = await beginAuthentication({
     cardId: txn.cardId,
     challenge: txn.challengeNonce,
-    kinds: req.body.kinds,
+    kinds: effective,
   });
   res.json(options);
 });
@@ -76,6 +94,7 @@ router.post('/authenticate/verify', validateBody(finishAuthSchema), async (req, 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     response: req.body.response as any,
     expectedChallenge: txn.challengeNonce,
+    allowedKinds: txn.allowedCredentialKinds,
   });
 
   const result = await orchestratePostAuth({

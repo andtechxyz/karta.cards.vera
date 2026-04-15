@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
 import { customAlphabet } from 'nanoid';
-import { TransactionStatus } from '@prisma/client';
+import { CardStatus, TransactionStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../db/prisma.js';
 import { getConfig } from '../config.js';
 import { badRequest, gone, notFound } from '../middleware/error.js';
-import { determineTier } from './tier.js';
+import { normaliseCurrency, resolveRulesFromProgram } from '../programs/index.js';
+import { evaluateTierRules } from './tier.js';
 import { assertTransition } from './state-machine.js';
 
 // Short, URL-safe, unambiguous RLID for the QR payload.
@@ -23,15 +24,33 @@ export async function createTransaction(input: CreateTxnInput) {
   if (input.amount <= 0) {
     throw badRequest('invalid_amount', 'amount must be positive minor units');
   }
-  const card = await prisma.card.findUnique({ where: { id: input.cardId } });
+  // Single query for card + program — `resolveRulesFromProgram` is pure, so
+  // we don't pay a second lookup inside the service.
+  const card = await prisma.card.findUnique({
+    where: { id: input.cardId },
+    include: { program: true },
+  });
   if (!card) throw notFound('card_not_found', 'Card not found');
-  if (card.status !== 'ACTIVATED') {
+  if (card.status !== CardStatus.ACTIVATED) {
     throw badRequest('card_not_activated', `Card status is ${card.status}`);
   }
 
+  // Lock in the credential kinds acceptable for this amount.  Persisting the
+  // set on the transaction means later rule edits in the admin UI can't
+  // retroactively widen or narrow an in-flight auth.
+  const { rules, currency: programCurrency, programId } =
+    resolveRulesFromProgram(card.program);
+  const currency = normaliseCurrency(input.currency);
+  if (programCurrency && programCurrency !== currency) {
+    throw badRequest(
+      'currency_mismatch',
+      `Card program ${programId} issues in ${programCurrency}; transaction currency was ${input.currency}`,
+    );
+  }
+  const decision = evaluateTierRules(rules, input.amount);
+
   const ttl = getConfig().TRANSACTION_TTL_SECONDS;
   const expiresAt = new Date(Date.now() + ttl * 1000);
-  const tier = determineTier(input.amount);
   const challenge = crypto.randomBytes(32).toString('base64url');
   const rlid = rlidGen();
 
@@ -40,11 +59,12 @@ export async function createTransaction(input: CreateTxnInput) {
       rlid,
       cardId: card.id,
       amount: input.amount,
-      currency: input.currency,
+      currency,
       merchantRef: input.merchantRef,
       merchantName: input.merchantName ?? 'Demo Merchant',
       status: TransactionStatus.PENDING,
-      tier,
+      tier: decision.tier,
+      allowedCredentialKinds: decision.allowedKinds,
       challengeNonce: challenge,
       expiresAt,
     },
@@ -52,19 +72,15 @@ export async function createTransaction(input: CreateTxnInput) {
 }
 
 export async function getTransactionByRlid(rlid: string) {
-  const txn = await prisma.transaction.findUnique({
-    where: { rlid },
-    include: { card: true },
-  });
+  const txn = await prisma.transaction.findUnique({ where: { rlid } });
   if (!txn) throw notFound('transaction_not_found', 'Transaction not found');
   // Opportunistic expiry: if a client hits a transaction past its TTL we
   // transition it to EXPIRED on read so the customer page can show a clean
   // "expired" state.
   if (txn.status === TransactionStatus.PENDING && txn.expiresAt < new Date()) {
-    const expired = await updateStatus(txn.id, TransactionStatus.EXPIRED, {
+    return updateStatus(txn.id, TransactionStatus.EXPIRED, {
       failureReason: 'transaction_ttl_elapsed',
     });
-    return { ...expired, card: txn.card };
   }
   return txn;
 }
@@ -101,12 +117,35 @@ export async function listTransactions(limit = 100) {
       card: {
         select: {
           id: true,
-          cardIdentifier: true,
+          // Opaque slug — never the PICC UID.  Safe for admin display.
+          cardRef: true,
           vaultEntry: { select: { panLast4: true } },
         },
       },
     },
   });
+}
+
+/**
+ * Customer-facing card summary scoped to a single transaction.  Holding the
+ * RLID is the only capability needed; we never expose anything that isn't
+ * required to render the /pay/{rlid} page (no UID, no SDM keys, no audit).
+ */
+export async function getTransactionCardSummary(rlid: string) {
+  const txn = await prisma.transaction.findUnique({
+    where: { rlid },
+    select: {
+      card: {
+        select: {
+          id: true,
+          vaultEntry: { select: { panLast4: true } },
+          credentials: { select: { kind: true } },
+        },
+      },
+    },
+  });
+  if (!txn) throw notFound('transaction_not_found', 'Transaction not found');
+  return txn.card;
 }
 
 /** Used by auth verify to fetch a txn and assert it's authable (not expired). */

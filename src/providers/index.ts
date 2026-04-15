@@ -19,8 +19,4 @@ export function getPaymentProvider(): PaymentProvider {
   return cached;
 }
 
-export function _setPaymentProvider(p: PaymentProvider | null): void {
-  cached = p;
-}
-
 export type { PaymentProvider, ChargeResult } from './provider.interface.js';

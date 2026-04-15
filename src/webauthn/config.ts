@@ -24,8 +24,18 @@ type RegOpts = GenerateRegistrationOptionsOpts;
 type AuthOpts = GenerateAuthenticationOptionsOpts;
 
 interface RegInputCommon {
-  cardIdentifier: string; // PICC UID hex — becomes user.id / userHandle
-  userName: string;
+  /**
+   * Opaque per-card handle that becomes WebAuthn's user.id / userHandle.
+   * MUST be the Card's internal cuid — never the PICC UID.  The UID stays
+   * server-side; exposing it here would leak it to the browser inside the
+   * credential-creation options.
+   */
+  userHandle: string;
+  /**
+   * Display label shown in the authenticator's account picker.  Server-derived
+   * (e.g. `card_${cuid.slice(0,8)}`); never client-supplied, never PII.
+   */
+  userLabel: string;
   /** Credentials already registered for this card on other devices; excluded so we don't duplicate. */
   excludeCredentialIds?: string[];
 }
@@ -42,9 +52,9 @@ export function buildNfcCardRegistrationOptions(input: RegInputCommon): RegOpts 
   return {
     rpName,
     rpID,
-    userID: Buffer.from(input.cardIdentifier, 'utf8'),
-    userName: input.userName,
-    userDisplayName: input.userName,
+    userID: Buffer.from(input.userHandle, 'utf8'),
+    userName: input.userLabel,
+    userDisplayName: input.userLabel,
     timeout: 120_000,
     // ES256 only.  The FIDO2 applet + CTAP1 path only sign ES256 (COSE alg = -7).
     supportedAlgorithmIDs: [-7],
@@ -69,9 +79,9 @@ export function buildPlatformRegistrationOptions(input: RegInputCommon): RegOpts
   return {
     rpName,
     rpID,
-    userID: Buffer.from(input.cardIdentifier, 'utf8'),
-    userName: input.userName,
-    userDisplayName: input.userName,
+    userID: Buffer.from(input.userHandle, 'utf8'),
+    userName: input.userLabel,
+    userDisplayName: input.userLabel,
     timeout: 120_000,
     // ES256 first, then RS256 as a fallback for Windows Hello legacy.
     supportedAlgorithmIDs: [-7, -257],

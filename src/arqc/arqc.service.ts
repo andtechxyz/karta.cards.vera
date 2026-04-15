@@ -12,16 +12,17 @@ import { hkdf } from './kdf.js';
 //     ▼  HKDF-SHA256(salt = "vera-vimk-v1", info = bin)
 //   VIMK(bin)            (per-BIN issuer master key — re-derived on demand)
 //     │
-//     ▼  HKDF-SHA256(salt = "vera-card-ac", info = cardIdentifier || atc)
+//     ▼  HKDF-SHA256(salt = "vera-card-ac", info = cardId || atc)
 //   K_card               (per-transaction card session key — re-derived)
 //     │
 //     ▼  HMAC-SHA256 truncated to 16 bytes
 //   ARQC = mac(K_card, amount || currency || merchantRef || nonce || atc)
 //
-// Card-scope domain separation uses `cardIdentifier` (PICC UID hex — plaintext
-// on the Card model) rather than PAN.  This matches real-EMV UID-based key
-// derivation and, critically, means the orchestration never needs to decrypt
-// PAN for ARQC — the PAN stays inside the provider adapter's trust boundary.
+// Card-scope domain separation uses the opaque `Card.id` cuid rather than the
+// PICC UID (which the new schema only ever holds in ciphertext) or the PAN.
+// Stable per-card, never crosses an HTTP boundary in cleartext, and keeps the
+// orchestration off the PAN path: the provider adapter is the only code that
+// decrypts the PAN, and ARQC derivation has no need for it.
 //
 // OBO: the real BIN-owning issuer has no part in this.  Vera is generating
 // AND validating inside its own trust boundary.  The cryptogram is a
@@ -44,8 +45,8 @@ function getSeed(): Buffer {
 export interface ArqcInput {
   /** 6-digit BIN (first 6 of PAN).  Plaintext on VaultEntry. */
   bin: string;
-  /** PICC UID hex — card-scope domain separation. Plaintext on Card. */
-  cardIdentifier: string;
+  /** Card.id (cuid) — opaque per-card scope for the KDF. */
+  cardId: string;
   /** Application Transaction Counter. Must monotonically increase per card. */
   atc: number;
   amount: number;
@@ -63,11 +64,11 @@ function deriveVimk(bin: string): Buffer {
   return hkdf(getSeed(), VIMK_SALT, Buffer.from(bin, 'utf8'), 32);
 }
 
-function deriveKCard(bin: string, cardIdentifier: string, atc: number): Buffer {
+function deriveKCard(bin: string, cardId: string, atc: number): Buffer {
   const vimk = deriveVimk(bin);
   const atcBuf = Buffer.alloc(4);
   atcBuf.writeUInt32BE(atc, 0);
-  const info = Buffer.concat([Buffer.from(cardIdentifier, 'utf8'), atcBuf]);
+  const info = Buffer.concat([Buffer.from(cardId, 'utf8'), atcBuf]);
   return hkdf(vimk, KCARD_SALT, info, 32);
 }
 
@@ -92,7 +93,7 @@ function buildMessage(i: ArqcInput): Buffer {
 }
 
 export function generateArqc(input: ArqcInput): ArqcResult {
-  const kCard = deriveKCard(input.bin, input.cardIdentifier, input.atc);
+  const kCard = deriveKCard(input.bin, input.cardId, input.atc);
   const msg = buildMessage(input);
   const mac = crypto.createHmac('sha256', kCard).update(msg).digest();
   return { arqc: mac.subarray(0, 16).toString('hex') };
