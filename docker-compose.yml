@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vera-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vera
+      POSTGRES_PASSWORD: vera
+      POSTGRES_DB: vera
+    ports:
+      - "5432:5432"
+    volumes:
+      - vera-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vera -d vera"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  vera-pgdata:

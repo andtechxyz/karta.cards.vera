@@ -1,0 +1,291 @@
+// Vera — Palisade Payment Prototype
+//
+// Data model. Key decisions (see plan at
+// /Users/danderson/.claude/plans/tingly-imagining-sketch.md):
+//   - No per-card IMK.  ARQC keys derive from VERA_ROOT_ARQC_SEED via BIN
+//     + PAN + ATC on the fly.
+//   - Card.cardIdentifier holds the PICC UID hex (schema-compatible with
+//     New T4T's `uid`), so cards may later roam across RPs.
+//   - VaultEntry is fingerprinted (HMAC-SHA256) for dedup without decrypt.
+//   - VaultEncryptionKey + keyVersion on VaultEntry supports rotation.
+//   - VaultAccessLog records every vault event — nothing touches PANs
+//     without an audit row.
+//   - Transaction status is an enum with explicit valid transitions
+//     enforced in service code (src/transactions/state-machine.ts).
+//   - Provider-agnostic: Transaction stores providerName/providerPaymentMethodId/
+//     providerTxnId.  Stripe-specific fields are renamed.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Cards
+// ---------------------------------------------------------------------------
+
+enum CardStatus {
+  BLANK
+  ACTIVATED
+  SUSPENDED
+  REVOKED
+}
+
+model Card {
+  id             String     @id @default(cuid())
+  // PICC UID hex (7 bytes = 14 hex chars).  Schema-compatible with New T4T.
+  cardIdentifier String     @unique
+  status         CardStatus @default(BLANK)
+
+  // Linked vault entry (one card = one card in the vault, 1:1 once vaulted).
+  vaultEntryId String?     @unique
+  vaultEntry   VaultEntry? @relation(fields: [vaultEntryId], references: [id])
+
+  // ATC (application transaction counter) for OBO ARQC generation.  Monotonic.
+  atc Int @default(0)
+
+  credentials  WebAuthnCredential[]
+  transactions Transaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Vault
+// ---------------------------------------------------------------------------
+
+model VaultEncryptionKey {
+  id               String    @id @default(cuid())
+  version          Int       @unique
+  // Wrapped data-encryption key. For v0 keys live in env; blob is the wrapped
+  // form we would store if using KMS. Present for rotation machinery.
+  encryptedDekBlob String
+  createdAt        DateTime  @default(now())
+  retiredAt        DateTime?
+}
+
+model VaultEntry {
+  id String @id @default(cuid())
+
+  // --- plaintext metadata (safe for display, never needs decrypt) -----------
+  panLast4       String
+  panBin         String // first 6 of PAN
+  cardholderName String
+  panExpiryMonth String
+  panExpiryYear  String
+
+  // --- ciphertext -----------------------------------------------------------
+  // AES-256-GCM ciphertext of the full PAN (+ CVC if present).  The payload
+  // format is versioned by keyVersion.
+  encryptedPan String // base64 of iv||ciphertext||tag (JSON for multi-field)
+  keyVersion   Int
+
+  // --- deterministic fingerprint for dedup (HMAC-SHA256 of normalised PAN) --
+  panFingerprint String @unique
+
+  // --- card back-reference --------------------------------------------------
+  card Card?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  retrievalTokens RetrievalToken[]
+  accessLogs      VaultAccessLog[]
+
+  @@index([panBin])
+  @@index([panLast4])
+}
+
+model RetrievalToken {
+  id       String @id @default(cuid())
+  // Opaque token returned to the caller. nanoid(32).
+  token    String @unique
+  // Single-use guard.
+  used     Boolean @default(false)
+  // Bound to an intended amount/currency so a stolen token can't be redirected.
+  amount   Int
+  currency String
+  // Expiry (typically createdAt + 60s).
+  expiresAt DateTime
+  // Creator (for audit).
+  purpose  String
+  createdByIp String?
+
+  vaultEntryId String
+  vaultEntry   VaultEntry @relation(fields: [vaultEntryId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  usedAt    DateTime?
+
+  accessLogs VaultAccessLog[]
+
+  @@index([vaultEntryId])
+  @@index([expiresAt])
+}
+
+enum VaultEventType {
+  CREATE
+  DUPLICATE_REJECTED
+  TOKEN_MINTED
+  TOKEN_CONSUMED
+  PROXY_FORWARDED
+  PROVIDER_TOKENISED
+}
+
+enum VaultEventResult {
+  SUCCESS
+  FAILURE
+}
+
+model VaultAccessLog {
+  id               String           @id @default(cuid())
+  eventType        VaultEventType
+  result           VaultEventResult
+  // Who/what initiated the event (e.g. "admin", "transaction:<rlid>", "provider:stripe").
+  actor            String
+  // Why (free-form, e.g. "admin store", "payment orchestration step 5").
+  purpose          String
+  ipAddress        String?
+  userAgent        String?
+  errorMessage     String?
+
+  vaultEntryId     String?
+  vaultEntry       VaultEntry? @relation(fields: [vaultEntryId], references: [id], onDelete: SetNull)
+
+  retrievalTokenId String?
+  retrievalToken   RetrievalToken? @relation(fields: [retrievalTokenId], references: [id], onDelete: SetNull)
+
+  transactionId    String?
+  transaction      Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  createdAt        DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([eventType])
+  @@index([vaultEntryId])
+}
+
+// ---------------------------------------------------------------------------
+// WebAuthn credentials
+// ---------------------------------------------------------------------------
+
+enum CredentialKind {
+  PLATFORM       // Face ID / Touch ID / Windows Hello  — Tier 1/3
+  CROSS_PLATFORM // NFC card tap (CTAP1 on Android)     — Tier 2
+}
+
+model WebAuthnCredential {
+  id String @id @default(cuid())
+
+  // Credential ID as raw bytes, stored base64url.  For NFC/CTAP1 this is
+  // the 112-byte key handle the applet produces.
+  credentialId String @unique
+
+  // Public key (COSE-encoded), stored base64url.
+  publicKey String
+
+  // Signature counter.  CTAP1 NFC may not increment this reliably; the
+  // verifier must tolerate sig_count == 0 throughout for NFC creds.
+  counter BigInt @default(0)
+
+  kind       CredentialKind
+  transports String[] // ['nfc'] or ['internal','hybrid'] etc.
+
+  // The device a passkey was registered from.  For display / debugging.
+  deviceName String?
+
+  // Back-reference to the card this credential authenticates.
+  cardId String
+  card   Card   @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  lastUsedAt DateTime?
+
+  @@index([cardId])
+}
+
+model RegistrationChallenge {
+  id        String   @id @default(cuid())
+  challenge String   @unique
+  // The card the challenge was issued for (userHandle = card.cardIdentifier).
+  cardId    String
+  kind      CredentialKind
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Transactions
+// ---------------------------------------------------------------------------
+
+enum TransactionStatus {
+  PENDING
+  AUTHN_STARTED
+  AUTHN_COMPLETE
+  ARQC_VALID
+  VAULT_RETRIEVED
+  STRIPE_CHARGED    // provider-agnostic despite the name; kept for log clarity
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+enum Tier {
+  TIER_1 // Low value — platform biometric (Face ID / Touch ID)
+  TIER_2 // Mid value — NFC card tap (CTAP1 over NFC)
+  TIER_3 // High value — platform biometric + stepped-up checks
+}
+
+model Transaction {
+  id String @id @default(cuid())
+
+  // Retrieval link ID — short, URL-safe, embedded in the QR.
+  rlid String @unique
+
+  cardId String
+  card   Card   @relation(fields: [cardId], references: [id])
+
+  amount      Int    // minor units (cents)
+  currency    String @default("USD")
+  merchantRef String
+  merchantName String @default("Demo Merchant")
+
+  status    TransactionStatus @default(PENDING)
+  tier      Tier
+  actualTier Tier?            // which ceremony actually completed
+
+  // Server-side bound WebAuthn challenge (32 random bytes, base64url).
+  challengeNonce String @unique
+
+  // Which credential was used for this authn (set after authn_complete).
+  usedCredentialId String?
+
+  // Provider fields (renamed from Stripe-specific — see plan).
+  providerName            String?
+  providerPaymentMethodId String?
+  providerTxnId           String?
+
+  // OBO ARQC that we generated + self-validated, stored for audit.
+  arqc String?
+  atcUsed Int?
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  completedAt DateTime?
+  failedAt    DateTime?
+  failureReason String?
+
+  accessLogs VaultAccessLog[]
+
+  @@index([rlid])
+  @@index([status])
+  @@index([cardId])
+}
