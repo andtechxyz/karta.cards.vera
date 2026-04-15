@@ -14,6 +14,7 @@ const defaults: Record<string, string> = {
   DATABASE_URL: 'postgresql://test:test@localhost:5432/vera_test?schema=public',
   WEBAUTHN_RP_ID: 'pay.karta.cards',
   WEBAUTHN_ORIGIN: 'https://pay.karta.cards',
+  WEBAUTHN_ORIGINS: 'https://pay.karta.cards,https://tap.karta.cards,https://activation.karta.cards,https://admin.karta.cards,https://vault.karta.cards',
   WEBAUTHN_RP_NAME: 'Palisade Pay',
   VAULT_KEY_V1: HEX32,
   VAULT_KEY_ACTIVE_VERSION: '1',
