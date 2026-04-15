@@ -36,6 +36,8 @@ const fakeVaultClient: VaultClient = {
   mintToken: vi.fn(),
   consumeToken: vi.fn(),
   proxy: vi.fn(),
+  listCards: vi.fn(),
+  listAudit: vi.fn(),
 };
 
 const VALID_INPUT = {

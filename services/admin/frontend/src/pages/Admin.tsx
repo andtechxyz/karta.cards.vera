@@ -255,7 +255,7 @@ function VaultTab() {
     setBusy(true);
     try {
       const r = await api.post<{ vaultEntryId: string; panLast4: string; deduped: boolean }>(
-        '/vault/store',
+        '/admin/vault/store',
         { cardId, pan, cvc, expiryMonth: expMonth, expiryYear: expYear, cardholderName, onDuplicate },
       );
       setOk(
@@ -823,7 +823,7 @@ function AuditTab() {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const r = await api.get<AuditRow[]>('/vault/audit?limit=200');
+      const r = await api.get<AuditRow[]>('/admin/vault/audit?limit=200');
       setRows(r);
     } catch (e) {
       setErr(errorMsg(e));
@@ -909,7 +909,7 @@ function useCards() {
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
-    const r = await api.get<Card[]>('/vault/cards');
+    const r = await api.get<Card[]>('/admin/vault/cards');
     setCards(r);
     setLoading(false);
   }, []);

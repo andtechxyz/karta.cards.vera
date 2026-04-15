@@ -1,6 +1,39 @@
 // Minimal fetch wrapper.  Everything lives under /api and is served from the
-// same origin (Vite proxies to localhost:3000 in dev; Cloudflare Tunnel
-// collapses front+back into pay.karta.cards in the demo).
+// same origin (Vite proxies to the admin backend in dev; Cloudflare Tunnel
+// collapses front+back behind admin.karta.cards in the demo).
+//
+// Every request carries X-Admin-Key from sessionStorage.  A 401 response
+// clears the stored key and triggers the App-level gate to re-prompt.
+
+const KEY_STORAGE = 'vera.adminKey';
+// Must match ADMIN_KEY_HEADER in services/admin/src/middleware/require-admin-key.ts.
+const ADMIN_KEY_HEADER = 'x-admin-key';
+
+export function getAdminKey(): string | null {
+  return sessionStorage.getItem(KEY_STORAGE);
+}
+
+export function setAdminKey(key: string): void {
+  sessionStorage.setItem(KEY_STORAGE, key);
+}
+
+export function clearAdminKey(): void {
+  sessionStorage.removeItem(KEY_STORAGE);
+}
+
+/**
+ * Subscribe to 401 responses from the API layer.  App.tsx uses this to drop
+ * back to the key-entry screen without a full page reload, preserving any
+ * in-flight user input elsewhere in the UI.
+ */
+type UnauthorizedHandler = () => void;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+export function onUnauthorized(handler: UnauthorizedHandler): () => void {
+  unauthorizedHandler = handler;
+  return () => {
+    if (unauthorizedHandler === handler) unauthorizedHandler = null;
+  };
+}
 
 export class ApiError extends Error {
   constructor(
@@ -14,18 +47,27 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (body) headers['content-type'] = 'application/json';
+  const adminKey = getAdminKey();
+  if (adminKey) headers[ADMIN_KEY_HEADER] = adminKey;
+
   const res = await fetch(`/api${path}`, {
     method,
-    headers: body ? { 'content-type': 'application/json' } : undefined,
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   const raw = await res.text();
   const data = raw ? JSON.parse(raw) : undefined;
+  if (res.status === 401) {
+    clearAdminKey();
+    unauthorizedHandler?.();
+  }
   if (!res.ok) {
     throw new ApiError(
       res.status,
-      data?.code ?? 'unknown_error',
-      data?.message ?? res.statusText,
+      data?.error?.code ?? 'unknown_error',
+      data?.error?.message ?? res.statusText,
       data,
     );
   }

@@ -8,7 +8,8 @@ export default defineConfig({
     port: 5176,
     allowedHosts: ['admin.karta.cards', 'localhost'],
     proxy: {
-      // Admin API (programs CRUD, card PATCH)
+      // Admin API — programs CRUD, card PATCH, and the vault proxy that
+      // signs HMAC requests to the vault service on the browser's behalf.
       '/api/programs': {
         target: 'http://localhost:3005',
         changeOrigin: false,
@@ -19,9 +20,8 @@ export default defineConfig({
         changeOrigin: false,
         ws: false,
       },
-      // Vault service (card list, vault store, audit)
-      '/api/vault': {
-        target: 'http://localhost:3004',
+      '/api/admin': {
+        target: 'http://localhost:3005',
         changeOrigin: false,
         ws: false,
       },

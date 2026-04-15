@@ -11,6 +11,7 @@
     "@vera/core": "*",
     "@vera/db": "*",
     "@vera/programs": "*",
+    "@vera/vault-client": "*",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "express-async-errors": "^3.1.0",

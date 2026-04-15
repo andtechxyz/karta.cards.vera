@@ -115,26 +115,29 @@ export interface VaultClientOptions {
   secret: string;
 }
 
-async function vaultFetch<T>(
+async function sendSigned<T>(
   baseUrl: string,
-  path: string,
+  pathAndQuery: string,
   method: string,
-  body: unknown,
+  bodyBytes: Buffer,
   auth: VaultClientOptions,
 ): Promise<T> {
-  const url = `${baseUrl.replace(/\/$/, '')}${path}`;
-  const bodyBytes = Buffer.from(JSON.stringify(body), 'utf8');
+  const url = `${baseUrl.replace(/\/$/, '')}${pathAndQuery}`;
   const authorization = signRequest({
     method,
-    pathAndQuery: path,
+    pathAndQuery,
     body: bodyBytes,
     keyId: auth.keyId,
     secret: auth.secret,
   });
+  // content-type is only meaningful when we're sending a body; GET paths omit
+  // it so the vault doesn't try to JSON-parse an empty buffer.
+  const headers: Record<string, string> = { authorization };
+  if (bodyBytes.length > 0) headers['content-type'] = 'application/json';
   const { statusCode, body: responseBody } = await request(url, {
     method,
-    headers: { 'content-type': 'application/json', authorization },
-    body: bodyBytes,
+    headers,
+    body: bodyBytes.length > 0 ? bodyBytes : undefined,
   });
   const text = await responseBody.text();
   if (statusCode >= 400) {
@@ -152,26 +155,96 @@ async function vaultFetch<T>(
   return JSON.parse(text) as T;
 }
 
+function vaultPost<T>(
+  baseUrl: string,
+  path: string,
+  body: unknown,
+  auth: VaultClientOptions,
+): Promise<T> {
+  return sendSigned<T>(baseUrl, path, 'POST', Buffer.from(JSON.stringify(body), 'utf8'), auth);
+}
+
+function vaultGet<T>(
+  baseUrl: string,
+  pathAndQuery: string,
+  auth: VaultClientOptions,
+): Promise<T> {
+  return sendSigned<T>(baseUrl, pathAndQuery, 'GET', Buffer.alloc(0), auth);
+}
+
+// --- List endpoints (admin-only, read-only) ---------------------------------
+
+export interface ListCardRow {
+  id: string;
+  cardRef: string;
+  status: string;
+  chipSerial: string | null;
+  programId: string | null;
+  program: { id: string; name: string; currency: string } | null;
+  batchId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  vaultEntry: { id: string; panLast4: string; panBin: string; cardholderName: string | null } | null;
+  credentials: { id: string; kind: string; deviceName: string | null; createdAt: string; lastUsedAt: string | null }[];
+  activationSessions: {
+    id: string;
+    expiresAt: string;
+    consumedAt: string | null;
+    consumedDeviceLabel: string | null;
+    createdAt: string;
+  }[];
+}
+
+export interface ListAuditRow {
+  id: string;
+  eventType: string;
+  result: 'SUCCESS' | 'FAILURE';
+  actor: string;
+  purpose: string;
+  createdAt: string;
+  errorMessage: string | null;
+  vaultEntry: { panLast4: string; panBin: string; cardholderName: string | null } | null;
+}
+
+export interface ListAuditInput {
+  limit?: number;
+  offset?: number;
+}
+
 export function createVaultClient(baseUrl: string, auth: VaultClientOptions) {
   return {
     /** Vault a PAN.  The verified caller identity (HMAC keyId) is the audit actor. */
     async storeCard(input: StoreCardInput): Promise<StoreCardResult> {
-      return vaultFetch<StoreCardResult>(baseUrl, '/api/vault/store', 'POST', input, auth);
+      return vaultPost<StoreCardResult>(baseUrl, '/api/vault/store', input, auth);
     },
 
     /** Mint a single-use retrieval token for a vaulted entry. */
     async mintToken(input: MintTokenInput): Promise<MintTokenResult> {
-      return vaultFetch<MintTokenResult>(baseUrl, '/api/vault/tokens/mint', 'POST', input, auth);
+      return vaultPost<MintTokenResult>(baseUrl, '/api/vault/tokens/mint', input, auth);
     },
 
     /** Atomically consume a retrieval token and return decrypted card data. */
     async consumeToken(input: ConsumeTokenInput): Promise<ConsumeTokenResult> {
-      return vaultFetch<ConsumeTokenResult>(baseUrl, '/api/vault/tokens/consume', 'POST', input, auth);
+      return vaultPost<ConsumeTokenResult>(baseUrl, '/api/vault/tokens/consume', input, auth);
     },
 
     /** Forward a request through the vault proxy (PAN substitution). */
     async proxy(input: ProxyInput): Promise<ProxyResult> {
-      return vaultFetch<ProxyResult>(baseUrl, '/api/vault/proxy', 'POST', input, auth);
+      return vaultPost<ProxyResult>(baseUrl, '/api/vault/proxy', input, auth);
+    },
+
+    /** Admin read: full card list with vault + credential + activation state. */
+    async listCards(): Promise<ListCardRow[]> {
+      return vaultGet<ListCardRow[]>(baseUrl, '/api/vault/cards', auth);
+    },
+
+    /** Admin read: vault audit log tail. */
+    async listAudit(input: ListAuditInput = {}): Promise<ListAuditRow[]> {
+      const params = new URLSearchParams();
+      if (input.limit !== undefined) params.set('limit', String(input.limit));
+      if (input.offset !== undefined) params.set('offset', String(input.offset));
+      const qs = params.toString();
+      return vaultGet<ListAuditRow[]>(baseUrl, `/api/vault/audit${qs ? `?${qs}` : ''}`, auth);
     },
   };
 }

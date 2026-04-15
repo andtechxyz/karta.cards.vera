@@ -13,6 +13,8 @@ const HEX32_D = '3'.repeat(64);
 const HEX32_E = '4'.repeat(64);
 const HEX32_F = '5'.repeat(64);
 const HEX32_G = '6'.repeat(64);
+const HEX32_H = '7'.repeat(64);
+const HEX32_I = '8'.repeat(64);
 
 const defaults: Record<string, string> = {
   NODE_ENV: 'test',
@@ -43,7 +45,10 @@ const defaults: Record<string, string> = {
   // carry the same values under each caller's keyId.
   SERVICE_AUTH_PAY_SECRET: HEX32_F,
   SERVICE_AUTH_ACTIVATION_SECRET: HEX32_G,
-  SERVICE_AUTH_KEYS: JSON.stringify({ pay: HEX32_F, activation: HEX32_G }),
+  SERVICE_AUTH_ADMIN_SECRET: HEX32_H,
+  SERVICE_AUTH_KEYS: JSON.stringify({ pay: HEX32_F, activation: HEX32_G, admin: HEX32_H }),
+  // Admin browser-facing auth — static shared key sent as X-Admin-Key header.
+  ADMIN_API_KEY: HEX32_I,
 };
 
 for (const [k, v] of Object.entries(defaults)) {
