@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { getKeyProvider, type KeyProvider } from './key-provider.js';
+import type { KeyProvider } from './key-provider.js';
 
 // -----------------------------------------------------------------------------
 // AES-256-GCM wrapper.
@@ -8,8 +8,12 @@ import { getKeyProvider, type KeyProvider } from './key-provider.js';
 //   [1-byte version prefix][12-byte IV][N-byte ciphertext][16-byte tag]
 //
 // The leading 0x01 tag lets us evolve the envelope later without breaking
-// existing entries.  The key version is stored separately on the VaultEntry
-// row (keyVersion column) — that's what the KeyProvider dereferences.
+// existing entries.  The key version is stored separately on the row that
+// holds the ciphertext — that's what the KeyProvider dereferences.
+//
+// The caller always passes the KeyProvider explicitly: there is no global
+// default because the vault PAN keyspace and the card-field keyspace must
+// not share a root (PCI-DSS 3.5/3.6).
 // -----------------------------------------------------------------------------
 
 const ENVELOPE_VERSION = 0x01;
@@ -23,13 +27,8 @@ export interface EncryptedPayload {
   keyVersion: number;
 }
 
-function getKp(provided?: KeyProvider): KeyProvider {
-  return provided ?? getKeyProvider();
-}
-
-export function encrypt(plaintext: string, kp?: KeyProvider): EncryptedPayload {
-  const provider = getKp(kp);
-  const key = provider.getKey(provider.activeVersion);
+export function encrypt(plaintext: string, kp: KeyProvider): EncryptedPayload {
+  const key = kp.getKey(kp.activeVersion);
   const iv = crypto.randomBytes(IV_LEN);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
@@ -37,13 +36,12 @@ export function encrypt(plaintext: string, kp?: KeyProvider): EncryptedPayload {
   const envelope = Buffer.concat([Buffer.from([ENVELOPE_VERSION]), iv, ct, tag]);
   return {
     ciphertext: envelope.toString('base64'),
-    keyVersion: provider.activeVersion,
+    keyVersion: kp.activeVersion,
   };
 }
 
-export function decrypt(payload: EncryptedPayload, kp?: KeyProvider): string {
-  const provider = getKp(kp);
-  const key = provider.getKey(payload.keyVersion);
+export function decrypt(payload: EncryptedPayload, kp: KeyProvider): string {
+  const key = kp.getKey(payload.keyVersion);
   const buf = Buffer.from(payload.ciphertext, 'base64');
   if (buf.length < 1 + IV_LEN + TAG_LEN) {
     throw new Error('ciphertext too short');

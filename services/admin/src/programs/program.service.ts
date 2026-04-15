@@ -1,14 +1,8 @@
 import { Prisma, type Program } from '@prisma/client';
 import { prisma } from '@vera/db';
 import { conflict, notFound } from '@vera/core';
-import { normaliseCurrency } from './currency.js';
+import { normaliseCurrency, tierRuleSetSchema } from '@vera/programs';
 import { renderNdefUrls, validateNdefUrlTemplate, type NdefUrlPair } from './ndef.js';
-import {
-  DEFAULT_TIER_RULES,
-  parseTierRuleSet,
-  tierRuleSetSchema,
-  type TierRuleSet,
-} from './tier-rules.js';
 
 // -----------------------------------------------------------------------------
 // Program CRUD — admin service.
@@ -90,19 +84,6 @@ export async function getProgram(id: string): Promise<Program> {
   const p = await prisma.program.findUnique({ where: { id } });
   if (!p) throw notFound('program_not_found', `Program ${id} not found`);
   return p;
-}
-
-export function resolveRulesFromProgram(
-  program: Program | null,
-): { rules: TierRuleSet; currency: string | null; programId: string | null } {
-  if (!program) {
-    return { rules: DEFAULT_TIER_RULES, currency: null, programId: null };
-  }
-  return {
-    rules: parseTierRuleSet(program.tierRules),
-    currency: program.currency,
-    programId: program.id,
-  };
 }
 
 export async function resolveNdefUrlsForCard(cardId: string): Promise<NdefUrlPair> {

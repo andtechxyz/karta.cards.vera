@@ -3,6 +3,7 @@ import { decrypt, badRequest, notFound, gone, unauthorized } from '@vera/core';
 import { signHandoff } from '@vera/handoff';
 import { verifySunUrl, type SunVerificationResult } from './sun/index.js';
 import { getTapConfig } from './env.js';
+import { getCardFieldKeyProvider } from './key-provider.js';
 
 // SUN-tap handler — invoked by the cardholder's phone after the card emits
 // its NDEF URL.  Verifies the SUN signature, advances the monotonic read
@@ -43,12 +44,13 @@ export async function handleSunTap(input: HandleSunTapInput): Promise<HandleSunT
     throw unauthorized('card_disabled', `Card is ${card.status}`);
   }
 
+  const cardFieldKp = getCardFieldKeyProvider();
   const sdmMetaReadKey = Buffer.from(
-    decrypt({ ciphertext: card.sdmMetaReadKeyEncrypted, keyVersion: card.keyVersion }),
+    decrypt({ ciphertext: card.sdmMetaReadKeyEncrypted, keyVersion: card.keyVersion }, cardFieldKp),
     'hex',
   );
   const sdmFileReadKey = Buffer.from(
-    decrypt({ ciphertext: card.sdmFileReadKeyEncrypted, keyVersion: card.keyVersion }),
+    decrypt({ ciphertext: card.sdmFileReadKeyEncrypted, keyVersion: card.keyVersion }, cardFieldKp),
     'hex',
   );
 

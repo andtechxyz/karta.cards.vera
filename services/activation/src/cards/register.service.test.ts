@@ -1,13 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CardStatus } from '@prisma/client';
+import type { StoreCardInput, StoreCardResult, VaultClient } from '@vera/vault-client';
 
 vi.mock('@vera/db', () => ({
   prisma: {
     card: {
-      findUnique: vi.fn(),
-      create: vi.fn(),
-    },
-    vaultEntry: {
       findUnique: vi.fn(),
       create: vi.fn(),
     },
@@ -22,14 +19,9 @@ vi.mock('@vera/core', async (importOriginal) => {
   };
 });
 
-vi.mock('./store-pan.js', () => ({
-  storeCardPan: vi.fn(),
-}));
-
 import { prisma } from '@vera/db';
 import { encrypt } from '@vera/core';
-import { storeCardPan } from './store-pan.js';
-import { registerCard } from './register.service.js';
+import { registerCard, _setVaultClient } from './register.service.js';
 import { fingerprintUid } from './fingerprint.js';
 
 type Mocked<T> = ReturnType<typeof vi.fn> & T;
@@ -37,6 +29,14 @@ const findCard = () =>
   prisma.card.findUnique as unknown as Mocked<typeof prisma.card.findUnique>;
 const createCard = () =>
   prisma.card.create as unknown as Mocked<typeof prisma.card.create>;
+
+const storeCardMock = vi.fn<(input: StoreCardInput) => Promise<StoreCardResult>>();
+const fakeVaultClient: VaultClient = {
+  storeCard: storeCardMock,
+  mintToken: vi.fn(),
+  consumeToken: vi.fn(),
+  proxy: vi.fn(),
+};
 
 const VALID_INPUT = {
   cardRef: 'ref_1',
@@ -58,16 +58,16 @@ const VALID_INPUT = {
 beforeEach(() => {
   vi.mocked(findCard()).mockReset();
   vi.mocked(createCard()).mockReset();
-  vi.mocked(storeCardPan).mockReset().mockResolvedValue({
+  storeCardMock.mockReset().mockResolvedValue({
     vaultEntryId: 've_1',
     panLast4: '4242',
-    panBin: '424242',
     deduped: false,
-  } as never);
+  });
   vi.mocked(encrypt).mockReset().mockImplementation((plaintext: string) => ({
     ciphertext: `enc(${plaintext})`,
     keyVersion: 1,
   } as never));
+  _setVaultClient(fakeVaultClient);
 });
 
 describe('registerCard — conflict checks (fail before vault writes)', () => {
@@ -81,7 +81,7 @@ describe('registerCard — conflict checks (fail before vault writes)', () => {
       status: 409,
       code: 'card_ref_taken',
     });
-    expect(storeCardPan).not.toHaveBeenCalled();
+    expect(storeCardMock).not.toHaveBeenCalled();
     expect(createCard()).not.toHaveBeenCalled();
   });
 
@@ -95,7 +95,7 @@ describe('registerCard — conflict checks (fail before vault writes)', () => {
       status: 409,
       code: 'card_uid_taken',
     });
-    expect(storeCardPan).not.toHaveBeenCalled();
+    expect(storeCardMock).not.toHaveBeenCalled();
     expect(createCard()).not.toHaveBeenCalled();
   });
 
@@ -127,7 +127,7 @@ describe('registerCard — happy path', () => {
 
     await registerCard({ ...VALID_INPUT, ip: '1.2.3.4', ua: 'test-agent' });
 
-    expect(storeCardPan).toHaveBeenCalledWith(
+    expect(storeCardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         pan: VALID_INPUT.card.pan,
         cvc: VALID_INPUT.card.cvc,
@@ -135,6 +135,7 @@ describe('registerCard — happy path', () => {
         expiryYear: VALID_INPUT.card.expiryYear,
         cardholderName: VALID_INPUT.card.cardholderName,
         actor: 'provisioning-agent',
+        purpose: `card register ${VALID_INPUT.cardRef}`,
         onDuplicate: 'error',
         ip: '1.2.3.4',
         ua: 'test-agent',

@@ -2,6 +2,7 @@ import { prisma } from '@vera/db';
 import { conflict, badRequest, encrypt } from '@vera/core';
 import { fingerprintPan, luhnValid } from './fingerprint.js';
 import { vaultEvents } from './events.js';
+import { getVaultPanKeyProvider } from './key-provider.js';
 import type { StoreInput, StoreResult, CardMetadata } from './types.js';
 
 /**
@@ -59,7 +60,7 @@ export async function storeCard(input: StoreInput): Promise<StoreResult> {
   }
 
   const payload = JSON.stringify({ pan, cvc: input.cvc });
-  const enc = encrypt(payload);
+  const enc = encrypt(payload, getVaultPanKeyProvider());
 
   const row = await prisma.vaultEntry.create({
     data: {

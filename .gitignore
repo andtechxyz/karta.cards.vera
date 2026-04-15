@@ -12,6 +12,10 @@ frontend/node_modules/
 frontend/dist/
 prisma/migrations/dev.db*
 
+# Per-frontend package-lock.json files.  We keep only the root lock; the
+# per-frontend ones are a side-effect of the nested-workspace install.
+services/*/frontend/package-lock.json
+
 # Incremental-build metadata from tsc / vite
 *.tsbuildinfo
 

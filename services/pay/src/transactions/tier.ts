@@ -1,5 +1,5 @@
 import { CredentialKind, Tier } from '@prisma/client';
-import { matchRule, type TierRuleSet } from '../programs/index.js';
+import { matchRule, type TierRuleSet } from '@vera/programs';
 
 // -----------------------------------------------------------------------------
 // Tier determination.

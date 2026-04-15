@@ -7,6 +7,27 @@ import { request } from 'undici';
 // The vault service URL is read from VAULT_SERVICE_URL in env.
 // -----------------------------------------------------------------------------
 
+export interface StoreCardInput {
+  pan: string;
+  cvc?: string;
+  expiryMonth: string;
+  expiryYear: string;
+  cardholderName: string;
+  actor: string;
+  purpose: string;
+  /** If set, vault links the new VaultEntry onto this Card row atomically. */
+  cardId?: string;
+  onDuplicate?: 'error' | 'reuse';
+  ip?: string;
+  ua?: string;
+}
+
+export interface StoreCardResult {
+  vaultEntryId: string;
+  panLast4: string;
+  deduped: boolean;
+}
+
 export interface MintTokenInput {
   vaultEntryId: string;
   amount: number;
@@ -113,6 +134,11 @@ async function vaultFetch<T>(
 
 export function createVaultClient(baseUrl: string) {
   return {
+    /** Vault a PAN.  Caller supplies its own actor/purpose for audit attribution. */
+    async storeCard(input: StoreCardInput): Promise<StoreCardResult> {
+      return vaultFetch<StoreCardResult>(baseUrl, '/api/vault/store', 'POST', input);
+    },
+
     /** Mint a single-use retrieval token for a vaulted entry. */
     async mintToken(input: MintTokenInput): Promise<MintTokenResult> {
       return vaultFetch<MintTokenResult>(baseUrl, '/api/vault/tokens/mint', 'POST', input);

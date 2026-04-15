@@ -4,7 +4,7 @@ import { CardStatus, TransactionStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@vera/db';
 import { badRequest, gone, notFound } from '@vera/core';
-import { normaliseCurrency, resolveRulesFromProgram } from '../programs/index.js';
+import { normaliseCurrency, resolveRulesFromProgram } from '@vera/programs';
 import { evaluateTierRules } from './tier.js';
 import { assertTransition } from './state-machine.js';
 import { getPayConfig } from '../env.js';

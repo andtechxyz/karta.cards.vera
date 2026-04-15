@@ -4,9 +4,13 @@
 // Tests that need a different config can override process.env and call
 // _resetConfigCache() before exercising the SUT.
 
-const HEX32 = '0'.repeat(64);
+// Distinct hex constants per key so a test that leaks across keyspaces fails
+// loudly instead of silently passing because two services share a secret.
+const HEX32_A = '0'.repeat(64);
 const HEX32_B = '1'.repeat(64);
 const HEX32_C = '2'.repeat(64);
+const HEX32_D = '3'.repeat(64);
+const HEX32_E = '4'.repeat(64);
 
 const defaults: Record<string, string> = {
   NODE_ENV: 'test',
@@ -16,15 +20,20 @@ const defaults: Record<string, string> = {
   WEBAUTHN_ORIGIN: 'https://pay.karta.cards',
   WEBAUTHN_ORIGINS: 'https://pay.karta.cards,https://tap.karta.cards,https://activation.karta.cards,https://admin.karta.cards,https://vault.karta.cards',
   WEBAUTHN_RP_NAME: 'Palisade Pay',
-  VAULT_KEY_V1: HEX32,
-  VAULT_KEY_ACTIVE_VERSION: '1',
-  VAULT_FINGERPRINT_KEY: HEX32_B,
+  // Vault PAN keyspace (vault service only).
+  VAULT_PAN_DEK_V1: HEX32_A,
+  VAULT_PAN_DEK_ACTIVE_VERSION: '1',
+  VAULT_PAN_FINGERPRINT_KEY: HEX32_B,
+  // Card-field keyspace (activation + tap).
+  CARD_FIELD_DEK_V1: HEX32_D,
+  CARD_FIELD_DEK_ACTIVE_VERSION: '1',
+  CARD_UID_FINGERPRINT_KEY: HEX32_E,
   VERA_ROOT_ARQC_SEED: HEX32_C,
   PAYMENT_PROVIDER: 'mock',
   TRANSACTION_TTL_SECONDS: '300',
   RETRIEVAL_TOKEN_TTL_SECONDS: '60',
   // Tap / handoff service
-  TAP_HANDOFF_SECRET: HEX32,
+  TAP_HANDOFF_SECRET: HEX32_A,
   ACTIVATION_URL: 'https://activation.karta.cards',
   // Vault service
   VAULT_SERVICE_URL: 'http://localhost:3004',

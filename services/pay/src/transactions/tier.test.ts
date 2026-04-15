@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { CredentialKind, Tier } from '@prisma/client';
 import { evaluateTierRules, summariseTier } from './tier.js';
-import type { TierRuleSet } from '../programs/index.js';
+import type { TierRuleSet } from '@vera/programs';
 
 // summariseTier is a tiny kind-set → Tier map.  Because the enforcement
 // primitive is allowedCredentialKinds (not Tier), any regression here is

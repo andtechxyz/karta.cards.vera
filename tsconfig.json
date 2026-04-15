@@ -6,6 +6,7 @@
     { "path": "./packages/webauthn" },
     { "path": "./packages/handoff" },
     { "path": "./packages/vault-client" },
+    { "path": "./packages/programs" },
     { "path": "./services/tap" },
     { "path": "./services/activation" },
     { "path": "./services/pay" },

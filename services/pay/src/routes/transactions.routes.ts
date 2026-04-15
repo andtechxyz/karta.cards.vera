@@ -9,7 +9,7 @@ import {
   listTransactions,
   toTransactionDto,
 } from '../transactions/index.js';
-import { currencySchema } from '../programs/index.js';
+import { currencySchema } from '@vera/programs';
 import { publish } from '../realtime/index.js';
 import { getPayConfig } from '../env.js';
 

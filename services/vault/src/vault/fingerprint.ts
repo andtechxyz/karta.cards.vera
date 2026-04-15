@@ -1,17 +1,17 @@
 import crypto from 'node:crypto';
-import { getCryptoConfig } from '@vera/core';
+import { getVaultConfig } from '../env.js';
 
 /**
  * Deterministic fingerprint of a PAN, for dedup without decrypt.
  *
- *   fingerprint = HMAC-SHA256(VAULT_FINGERPRINT_KEY, normalisedPan)
+ *   fingerprint = HMAC-SHA256(VAULT_PAN_FINGERPRINT_KEY, normalisedPan)
  *
  * Normalisation: strip spaces and dashes, lowercase.  PANs are digits-only
  * in practice but we defensively normalise for pasted values.
  */
 export function fingerprintPan(rawPan: string): string {
   const normalised = rawPan.replace(/[\s-]/g, '').toLowerCase();
-  const key = Buffer.from(getCryptoConfig().VAULT_FINGERPRINT_KEY, 'hex');
+  const key = Buffer.from(getVaultConfig().VAULT_PAN_FINGERPRINT_KEY, 'hex');
   return crypto.createHmac('sha256', key).update(normalised).digest('hex');
 }
 

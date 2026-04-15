@@ -2,6 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { prisma } from '@vera/db';
 import { badRequest, gone, notFound, decrypt } from '@vera/core';
 import type { EncryptedPayload } from '@vera/core';
+import { getVaultPanKeyProvider } from './key-provider.js';
 import { vaultEvents } from './events.js';
 import type { DecryptedCard, MintTokenInput, MintTokenResult } from './types.js';
 import { getVaultConfig } from '../env.js';
@@ -135,7 +136,7 @@ export async function consumeRetrievalToken(
     ciphertext: row.vaultEntry.encryptedPan,
     keyVersion: row.vaultEntry.keyVersion,
   };
-  const plaintext = decrypt(payload);
+  const plaintext = decrypt(payload, getVaultPanKeyProvider());
   const { pan, cvc } = JSON.parse(plaintext) as { pan: string; cvc?: string };
 
   const card: DecryptedCard = {

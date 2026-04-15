@@ -1,12 +1,18 @@
 import { CardStatus } from '@prisma/client';
 import { prisma } from '@vera/db';
-import { encrypt, conflict, internal } from '@vera/core';
-import { storeCardPan } from './store-pan.js';
+import { encrypt, ApiError, conflict, internal } from '@vera/core';
+import { createVaultClient, VaultClientError, type VaultClient } from '@vera/vault-client';
+import { getActivationConfig } from '../env.js';
 import { fingerprintUid } from './fingerprint.js';
+import { getCardFieldKeyProvider } from './key-provider.js';
 
 // Card registration — entry point for Palisade's provisioning-agent.
 // Lands a Card in PERSONALISED with a linked VaultEntry; first cardholder
 // SUN-tap (separate flow) flips it to ACTIVATED and registers the passkey.
+//
+// PANs go over HTTP to the vault service (never persisted directly from
+// activation).  UID + SDM keys are still encrypted inline — those are part of
+// the Card row, not the VaultEntry, and vault-service doesn't own them.
 
 const ACTOR = 'provisioning-agent';
 
@@ -37,6 +43,20 @@ export interface RegisterCardResult {
   panLast4: string;
 }
 
+// Lazy singleton — resolved on first call so tests can override env before import.
+let vaultClient: VaultClient | null = null;
+function getVaultClient(): VaultClient {
+  if (!vaultClient) {
+    vaultClient = createVaultClient(getActivationConfig().VAULT_SERVICE_URL);
+  }
+  return vaultClient;
+}
+
+/** Test hook — swap the vault client (or reset to env-derived default). */
+export function _setVaultClient(client: VaultClient | null): void {
+  vaultClient = client;
+}
+
 export async function registerCard(input: RegisterCardInput): Promise<RegisterCardResult> {
   const uidNormalised = input.uid.toLowerCase();
   const uidFingerprint = fingerprintUid(uidNormalised);
@@ -48,29 +68,42 @@ export async function registerCard(input: RegisterCardInput): Promise<RegisterCa
   if (byRef) throw conflict('card_ref_taken', 'cardRef already registered');
   if (byUid) throw conflict('card_uid_taken', 'A card with this UID is already registered');
 
-  // Store the PAN (inline — activation has the same vault keys)
-  const vaulted = await storeCardPan({
-    pan: input.card.pan,
-    cvc: input.card.cvc,
-    expiryMonth: input.card.expiryMonth,
-    expiryYear: input.card.expiryYear,
-    cardholderName: input.card.cardholderName,
-    actor: ACTOR,
-    purpose: `card register ${input.cardRef}`,
-    ip: input.ip,
-    ua: input.ua,
-    onDuplicate: 'error',
-  });
-
-  // Encrypt UID + SDM keys under the vault key.
-  const uidEnc = encrypt(uidNormalised);
-  const metaKeyEnc = encrypt(input.sdmMetaReadKey.toLowerCase());
-  const fileKeyEnc = encrypt(input.sdmFileReadKey.toLowerCase());
+  // Encrypt BEFORE the vault call so a key-version drift fails fast without
+  // creating an orphaned VaultEntry we can't link a Card to.  These fields
+  // live under the card-field DEK (distinct from vault's PAN DEK).
+  const cardFieldKp = getCardFieldKeyProvider();
+  const uidEnc = encrypt(uidNormalised, cardFieldKp);
+  const metaKeyEnc = encrypt(input.sdmMetaReadKey.toLowerCase(), cardFieldKp);
+  const fileKeyEnc = encrypt(input.sdmFileReadKey.toLowerCase(), cardFieldKp);
   if (
     uidEnc.keyVersion !== metaKeyEnc.keyVersion ||
     metaKeyEnc.keyVersion !== fileKeyEnc.keyVersion
   ) {
     throw internal('vault_key_drift', 'vault key version drift mid-call');
+  }
+
+  let vaulted;
+  try {
+    vaulted = await getVaultClient().storeCard({
+      pan: input.card.pan,
+      cvc: input.card.cvc,
+      expiryMonth: input.card.expiryMonth,
+      expiryYear: input.card.expiryYear,
+      cardholderName: input.card.cardholderName,
+      actor: ACTOR,
+      purpose: `card register ${input.cardRef}`,
+      onDuplicate: 'error',
+      ip: input.ip,
+      ua: input.ua,
+    });
+  } catch (err) {
+    if (err instanceof VaultClientError) {
+      // Preserve the vault's HTTP status so the caller sees the real failure
+      // mode (409 duplicate, 400 validation, 500 internal, etc.) rather than
+      // having everything flattened to 409.
+      throw new ApiError(err.status, err.code, err.message);
+    }
+    throw err;
   }
 
   const card = await prisma.card.create({

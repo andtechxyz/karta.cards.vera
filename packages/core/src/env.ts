@@ -1,5 +1,30 @@
-import 'dotenv/config';
+import { config as loadDotenv } from 'dotenv';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { z, type ZodRawShape, type ZodObject } from 'zod';
+
+// -----------------------------------------------------------------------------
+// .env loading.
+//
+// Each service runs from its own workspace dir (cwd = services/<name>), but
+// the `.env` lives at the monorepo root.  Walk up from cwd until we find the
+// nearest `.env` and load it.  If none is found, fall through silently — zod
+// validation below will raise a clear error listing the missing keys.
+// -----------------------------------------------------------------------------
+function findEnvFile(startDir: string): string | undefined {
+  let dir = startDir;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const candidate = join(dir, '.env');
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+const envPath = findEnvFile(process.cwd());
+if (envPath) loadDotenv({ path: envPath });
 
 // -----------------------------------------------------------------------------
 // Shared env schema fragments.
@@ -34,15 +59,32 @@ export const baseEnvShape = {
   DATABASE_URL: z.string().url(),
 } as const;
 
-/**
- * Zod shape fragment for AES-256-GCM vault encryption keys.
- * Services that encrypt/decrypt data (tap, vault, activation) spread this
- * into their own `defineEnv` call.
- */
-export const cryptoEnvShape = {
-  VAULT_KEY_V1: hexKey(32),
-  VAULT_KEY_ACTIVE_VERSION: z.coerce.number().int().positive().default(1),
-  VAULT_FINGERPRINT_KEY: hexKey(32),
+// -----------------------------------------------------------------------------
+// Cryptographic key env shapes — split by purpose.
+//
+// PCI-DSS 3.5/3.6 require keys to be scoped to their protected data.  Vera's
+// vault PAN keyspace and the card-field (UID + SDM) keyspace cover different
+// fields protected by different services; they MUST NOT share a root.  Each
+// shape below is spread into only the services that legitimately need it:
+//
+//   vaultPanCryptoEnvShape     → vault service only
+//   cardFieldCryptoEnvShape    → activation (write) + tap (read)
+//
+// The UID dedup fingerprint (activation-only) is declared inline in
+// activation's env shape — no shared fragment, because nothing else uses it.
+// -----------------------------------------------------------------------------
+
+/** DEK + fingerprint for PAN encryption (vault service only). */
+export const vaultPanCryptoEnvShape = {
+  VAULT_PAN_DEK_V1: hexKey(32),
+  VAULT_PAN_DEK_ACTIVE_VERSION: z.coerce.number().int().positive().default(1),
+  VAULT_PAN_FINGERPRINT_KEY: hexKey(32),
+} as const;
+
+/** DEK for Card.uid + SDM read keys (activation writes, tap reads). */
+export const cardFieldCryptoEnvShape = {
+  CARD_FIELD_DEK_V1: hexKey(32),
+  CARD_FIELD_DEK_ACTIVE_VERSION: z.coerce.number().int().positive().default(1),
 } as const;
 
 /**
@@ -74,6 +116,3 @@ export function defineEnv<Shape extends ZodRawShape>(shape: Shape) {
   return { get, reset, schema };
 }
 
-/** Cached env accessor for just the crypto fields (used by key-provider.ts). */
-const { get: getCryptoConfig, reset: _resetCryptoConfig } = defineEnv(cryptoEnvShape);
-export { getCryptoConfig, _resetCryptoConfig };

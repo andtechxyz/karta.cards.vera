@@ -1,11 +1,18 @@
+// Admin barrel — re-exports the @vera/programs surface plus admin-only bits
+// (Prisma-backed CRUD + NDEF template rendering).  Routes and other admin
+// modules import from here for a single-stop surface.
+
 export {
   DEFAULT_TIER_RULES,
   matchRule,
   parseTierRuleSet,
   tierRuleSchema,
   tierRuleSetSchema,
-} from './tier-rules.js';
-export type { TierRule, TierRuleSet } from './tier-rules.js';
+  currencySchema,
+  normaliseCurrency,
+  resolveRulesFromProgram,
+} from '@vera/programs';
+export type { TierRule, TierRuleSet } from '@vera/programs';
 
 export {
   createProgram,
@@ -13,12 +20,9 @@ export {
   listPrograms,
   resolveNdefUrlsByCardRef,
   resolveNdefUrlsForCard,
-  resolveRulesFromProgram,
   updateProgram,
 } from './program.service.js';
 export type { UpsertProgramInput } from './program.service.js';
 
 export { renderNdefUrls, validateNdefUrlTemplate } from './ndef.js';
 export type { NdefUrlPair } from './ndef.js';
-
-export { currencySchema, normaliseCurrency } from './currency.js';

@@ -1,12 +1,17 @@
-import { getCryptoConfig } from './env.js';
+// -----------------------------------------------------------------------------
+// KeyProvider — abstract source of AES-256-GCM data-encryption keys by version.
+//
+// There is no cross-service singleton.  Each service that encrypts or
+// decrypts data owns its own KeyProvider instance wired to its own keyspace
+// (PCI-DSS 3.5/3.6 — keys scoped to the data they protect).  Activation, tap
+// and vault each construct a local `EnvKeyProvider` and pass it explicitly to
+// `encrypt`/`decrypt` — there is no default.
+//
+// Swapping env-backed keys for AWS KMS or an HSM is a one-class change:
+// implement KeyProvider against kms.Decrypt and construct it in the same
+// place the service currently instantiates EnvKeyProvider.
+// -----------------------------------------------------------------------------
 
-/**
- * Provides raw data-encryption keys (DEKs) by version.
- *
- * For v0 this reads from env (VAULT_KEY_V1 etc.).  Swapping to AWS KMS is
- * a one-file replacement: implement KeyProvider.getKey to call kms.Decrypt
- * on a wrapped DEK; the rest of the vault module doesn't change.
- */
 export interface KeyProvider {
   /** Current active key version for new writes. */
   readonly activeVersion: number;
@@ -14,36 +19,31 @@ export interface KeyProvider {
   getKey(version: number): Buffer;
 }
 
+export interface EnvKeyProviderInput {
+  activeVersion: number;
+  /** Map from key version → hex-encoded DEK.  Must contain `activeVersion`. */
+  keys: Record<number, string>;
+}
+
 export class EnvKeyProvider implements KeyProvider {
   readonly activeVersion: number;
-  private keys = new Map<number, Buffer>();
+  private readonly keys = new Map<number, Buffer>();
 
-  constructor() {
-    const config = getCryptoConfig();
-    this.activeVersion = config.VAULT_KEY_ACTIVE_VERSION;
-    // Only v1 is defined for v0 of the prototype; extend by adding VAULT_KEY_V2
-    // to config + a lookup here. The versioning machinery is what matters.
-    this.keys.set(1, Buffer.from(config.VAULT_KEY_V1, 'hex'));
+  constructor(input: EnvKeyProviderInput) {
+    this.activeVersion = input.activeVersion;
+    for (const [version, hex] of Object.entries(input.keys)) {
+      this.keys.set(Number(version), Buffer.from(hex, 'hex'));
+    }
     if (!this.keys.has(this.activeVersion)) {
       throw new Error(
-        `VAULT_KEY_ACTIVE_VERSION=${this.activeVersion} but no VAULT_KEY_V${this.activeVersion} is configured`,
+        `activeVersion=${this.activeVersion} but no key for that version was provided`,
       );
     }
   }
 
   getKey(version: number): Buffer {
     const key = this.keys.get(version);
-    if (!key) throw new Error(`Unknown vault key version: ${version}`);
+    if (!key) throw new Error(`Unknown key version: ${version}`);
     return key;
   }
-}
-
-let cached: KeyProvider | null = null;
-export function getKeyProvider(): KeyProvider {
-  if (!cached) cached = new EnvKeyProvider();
-  return cached;
-}
-
-export function _resetKeyProvider(): void {
-  cached = null;
 }

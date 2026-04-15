@@ -10,6 +10,7 @@
     { "path": "../../packages/core" },
     { "path": "../../packages/db" },
     { "path": "../../packages/webauthn" },
-    { "path": "../../packages/vault-client" }
+    { "path": "../../packages/vault-client" },
+    { "path": "../../packages/programs" }
   ]
 }
