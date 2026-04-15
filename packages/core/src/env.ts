@@ -35,6 +35,17 @@ export const baseEnvShape = {
 } as const;
 
 /**
+ * Zod shape fragment for AES-256-GCM vault encryption keys.
+ * Services that encrypt/decrypt data (tap, vault, activation) spread this
+ * into their own `defineEnv` call.
+ */
+export const cryptoEnvShape = {
+  VAULT_KEY_V1: hexKey(32),
+  VAULT_KEY_ACTIVE_VERSION: z.coerce.number().int().positive().default(1),
+  VAULT_FINGERPRINT_KEY: hexKey(32),
+} as const;
+
+/**
  * Build a process-wide config loader from a zod shape.  Caches the parsed
  * result; exposes `_reset()` for tests.
  */
@@ -62,3 +73,7 @@ export function defineEnv<Shape extends ZodRawShape>(shape: Shape) {
 
   return { get, reset, schema };
 }
+
+/** Cached env accessor for just the crypto fields (used by key-provider.ts). */
+const { get: getCryptoConfig, reset: _resetCryptoConfig } = defineEnv(cryptoEnvShape);
+export { getCryptoConfig, _resetCryptoConfig };
