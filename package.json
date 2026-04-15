@@ -10,7 +10,7 @@
     "services/*/frontend"
   ],
   "scripts": {
-    "dev": "concurrently -n tap,activation,pay,vault,admin -c magenta,cyan,blue,yellow,green \"npm run dev -w services/tap\" \"npm run dev -w services/activation\" \"npm run dev -w services/pay\" \"npm run dev -w services/vault\" \"npm run dev -w services/admin\"",
+    "dev": "concurrently -n tap,activation,pay,vault,admin,activation-ui,pay-ui,admin-ui -c magenta,cyan,blue,yellow,green,cyan.dim,blue.dim,green.dim \"npm run dev -w services/tap\" \"npm run dev -w services/activation\" \"npm run dev -w services/pay\" \"npm run dev -w services/vault\" \"npm run dev -w services/admin\" \"npm run dev -w @vera/activation-frontend\" \"npm run dev -w @vera/pay-frontend\" \"npm run dev -w @vera/admin-frontend\"",
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "typecheck": "tsc -b --verbose",

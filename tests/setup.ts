@@ -23,6 +23,11 @@ const defaults: Record<string, string> = {
   PAYMENT_PROVIDER: 'mock',
   TRANSACTION_TTL_SECONDS: '300',
   RETRIEVAL_TOKEN_TTL_SECONDS: '60',
+  // Tap / handoff service
+  TAP_HANDOFF_SECRET: HEX32,
+  ACTIVATION_URL: 'https://activation.karta.cards',
+  // Vault service
+  VAULT_SERVICE_URL: 'http://localhost:3004',
 };
 
 for (const [k, v] of Object.entries(defaults)) {

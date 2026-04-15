@@ -7,8 +7,8 @@ import { defineConfig } from 'vitest/config';
 // requiring a real .env on test machines / CI.
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts'],
-    exclude: ['node_modules/**', 'external/**', 'dist/**', 'frontend/**'],
+    include: ['src/**/*.test.ts', 'services/**/*.test.ts', 'packages/**/*.test.ts'],
+    exclude: ['node_modules/**', 'external/**', 'dist/**', 'frontend/**', 'services/*/frontend/**'],
     setupFiles: ['tests/setup.ts'],
     environment: 'node',
     // Each test file gets its own worker so the getConfig() / KeyProvider

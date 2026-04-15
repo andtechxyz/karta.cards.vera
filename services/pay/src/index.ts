@@ -1,0 +1,35 @@
+import 'express-async-errors';
+import express from 'express';
+import cors from 'cors';
+import { errorMiddleware } from '@vera/core';
+import { getPayConfig } from './env.js';
+import authRouter from './routes/auth.routes.js';
+import transactionsRouter from './routes/transactions.routes.js';
+import paymentRouter from './routes/payment.routes.js';
+import webhooksRouter from './routes/webhooks/index.js';
+
+const config = getPayConfig();
+const app = express();
+
+app.use(cors({ origin: '*', credentials: false }));
+app.set('trust proxy', 1);
+
+// Webhooks must get raw body BEFORE express.json()
+app.use('/api/webhooks', webhooksRouter);
+
+app.use(express.json({ limit: '64kb' }));
+
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, service: 'pay', provider: config.PAYMENT_PROVIDER });
+});
+
+app.use('/api/auth', authRouter);
+app.use('/api/transactions', transactionsRouter);
+app.use('/api/payment', paymentRouter);
+
+app.use(errorMiddleware);
+
+app.listen(config.PORT, () => {
+  // eslint-disable-next-line no-console
+  console.log(`[pay] listening on :${config.PORT} — provider=${config.PAYMENT_PROVIDER}`);
+});

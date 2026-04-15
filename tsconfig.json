@@ -4,6 +4,12 @@
     { "path": "./packages/db" },
     { "path": "./packages/core" },
     { "path": "./packages/webauthn" },
-    { "path": "./packages/handoff" }
+    { "path": "./packages/handoff" },
+    { "path": "./packages/vault-client" },
+    { "path": "./services/tap" },
+    { "path": "./services/activation" },
+    { "path": "./services/pay" },
+    { "path": "./services/vault" },
+    { "path": "./services/admin" }
   ]
 }
