@@ -1,8 +1,11 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { hexKey } from '../config.js';
 import { validateBody } from '../middleware/validate.js';
 import { registerCard } from '../cards/index.js';
+import { prisma } from '../db/prisma.js';
+import { badRequest, notFound } from '../middleware/error.js';
 
 const router: Router = Router();
 
@@ -36,6 +39,57 @@ router.post('/register', validateBody(registerSchema), async (req, res) => {
     ua: req.get('user-agent') ?? undefined,
   });
   res.status(201).json(result);
+});
+
+// PATCH /api/cards/:id — admin-only card update.  The only field currently
+// mutable post-registration is the program link, because reassigning a card
+// to a different program reconfigures its tier rules without requiring a
+// re-perso.  PAN, UID, SDM keys, and cardRef stay immutable.
+const patchSchema = z
+  .object({
+    programId: z.string().min(1).max(64).nullable().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, {
+    message: 'at least one field must be supplied',
+  });
+
+router.patch('/:id', validateBody(patchSchema), async (req, res) => {
+  const body = req.body as z.infer<typeof patchSchema>;
+  const data: Prisma.CardUpdateInput = {};
+  if (body.programId !== undefined) {
+    data.program = body.programId
+      ? { connect: { id: body.programId } }
+      : { disconnect: true };
+  }
+
+  try {
+    const card = await prisma.card.update({
+      where: { id: req.params.id },
+      data,
+      select: {
+        id: true,
+        cardRef: true,
+        programId: true,
+        program: { select: { id: true, name: true, currency: true } },
+      },
+    });
+    res.json(card);
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+      // Prisma bundles both "card missing" and "program connect missing"
+      // under P2025 but distinguishes them in `meta.cause`:
+      //   - card missing     → "Record to update not found."
+      //   - program missing  → "No 'Program' record(s) ... nested connect ..."
+      // Map the program variant to 400 so the admin sees "pick a real program"
+      // rather than "this card disappeared".
+      const cause = typeof err.meta?.cause === 'string' ? err.meta.cause : '';
+      if (/No ['"]Program['"] record/i.test(cause)) {
+        throw badRequest('program_not_found', `Program ${body.programId} not found`);
+      }
+      throw notFound('card_not_found', `Card ${req.params.id} not found`);
+    }
+    throw err;
+  }
 });
 
 export default router;

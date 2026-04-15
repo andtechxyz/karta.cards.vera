@@ -29,6 +29,7 @@ interface Card {
   status: 'BLANK' | 'PERSONALISED' | 'ACTIVATED' | 'SUSPENDED' | 'REVOKED';
   chipSerial: string | null;
   programId: string | null;
+  program: { id: string; name: string; currency: string } | null;
   batchId: string | null;
   createdAt: string;
   vaultEntry?: { id: string; panLast4: string; panBin: string; cardholderName: string } | null;
@@ -73,14 +74,23 @@ const labels: Record<TabKey, string> = {
 // --- Cards tab ---------------------------------------------------------------
 
 function CardsTab() {
-  const { cards, loading } = useCards();
+  const { cards, loading, reload } = useCards();
+  const [programs, setPrograms] = useState<Program[]>([]);
+
+  // Fetch programs once for the per-row program selector.  Admin is the only
+  // surface that mutates Card.programId; a fresh fetch on mount is enough —
+  // the selector options stay stable for the admin session.
+  useEffect(() => {
+    api.get<Program[]>('/programs').then(setPrograms).catch(() => setPrograms([]));
+  }, []);
 
   return (
     <div className="panel">
       <h2 style={{ margin: 0 }}>Cards</h2>
       <p className="small" style={{ marginTop: 8 }}>
         Cards are registered by Palisade's provisioning-agent (POST /api/cards/register)
-        and activated by the cardholder tapping the physical card. Admin is read-only.
+        and activated by the cardholder tapping the physical card. Admin can
+        reassign a card to a different program; everything else is read-only.
       </p>
       {loading ? (
         <p className="small">Loading…</p>
@@ -95,6 +105,7 @@ function CardsTab() {
               <th>Card ref</th>
               <th>Status</th>
               <th>Vault</th>
+              <th>Program</th>
               <th>Activation</th>
               <th>Credentials</th>
               <th>Created</th>
@@ -117,6 +128,9 @@ function CardsTab() {
                   )}
                 </td>
                 <td>
+                  <ProgramCell card={c} programs={programs} onChanged={reload} />
+                </td>
+                <td>
                   <ActivationCell card={c} />
                 </td>
                 <td>
@@ -136,6 +150,56 @@ function CardsTab() {
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+/**
+ * Per-row program selector.  Empty string = no program (Card.programId null,
+ * falls back to DEFAULT_TIER_RULES server-side).  PATCH happens inline on
+ * change; failures surface below the select and the row state is reloaded
+ * from the server on success so we never render optimistic-but-wrong data.
+ */
+function ProgramCell({
+  card,
+  programs,
+  onChanged,
+}: {
+  card: Card;
+  programs: Program[];
+  onChanged: () => Promise<void> | void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const change = async (next: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.patch<Card>(`/cards/${card.id}`, { programId: next === '' ? null : next });
+      await onChanged();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <select
+        value={card.programId ?? ''}
+        onChange={(e) => change(e.target.value)}
+        disabled={busy}
+      >
+        <option value="">(default rules)</option>
+        {programs.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name} ({p.currency})
+          </option>
+        ))}
+      </select>
+      {err && <div className="tag err" style={{ marginTop: 4 }}>{err}</div>}
     </div>
   );
 }

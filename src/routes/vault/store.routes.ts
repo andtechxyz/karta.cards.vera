@@ -24,6 +24,7 @@ router.get('/cards', async (_req, res) => {
       status: true,
       chipSerial: true,
       programId: true,
+      program: { select: { id: true, name: true, currency: true } },
       batchId: true,
       createdAt: true,
       updatedAt: true,
