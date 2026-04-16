@@ -40,10 +40,7 @@ jobs:
         with:
           node-version: 22
 
-      # package-lock.json is generated on macOS ARM and omits linux-x64 optional
-      # deps (rollup).  Delete it so npm install generates a fresh one with the
-      # runner's platform-specific binaries.
-      - run: rm package-lock.json && npm install
+      - run: npm ci
       - run: npx prisma generate --schema packages/db/prisma/schema.prisma
       - run: npx tsc -b
       - run: npx vitest run
