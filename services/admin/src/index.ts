@@ -1,7 +1,7 @@
 import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
-import { errorMiddleware } from '@vera/core';
+import { errorMiddleware, serveFrontend } from '@vera/core';
 import { getAdminConfig } from './env.js';
 import { ADMIN_KEY_HEADER, requireAdminKey } from './middleware/require-admin-key.js';
 import programsRouter from './routes/programs.routes.js';
@@ -29,6 +29,7 @@ app.use('/api/programs', adminGate, programsRouter);
 app.use('/api/cards', adminGate, cardsRouter);
 app.use('/api/admin/vault', adminGate, vaultProxyRouter);
 
+serveFrontend(app, import.meta.url);
 app.use(errorMiddleware);
 
 app.listen(config.PORT, () => {

@@ -1,7 +1,7 @@
 import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
-import { errorMiddleware } from '@vera/core';
+import { errorMiddleware, serveFrontend } from '@vera/core';
 import {
   expirePendingTransactions,
   purgeExpiredRegistrationChallenges,
@@ -32,6 +32,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/transactions', transactionsRouter);
 app.use('/api/payment', paymentRouter);
 
+serveFrontend(app, import.meta.url);
 app.use(errorMiddleware);
 
 // PCI-DSS 3.1.  The read-path in transaction.service.ts also expires on
