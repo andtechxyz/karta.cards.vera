@@ -107,7 +107,8 @@ COPY --from=builder /app/services/${SERVICE}/frontend/dist/ services/${SERVICE}/
 ENV SERVICE_NAME=${SERVICE}
 
 # Non-root user for production
-RUN addgroup -S vera && adduser -S vera -G vera
+RUN addgroup -S vera && adduser -S vera -G vera \
+    && chown -R vera:vera node_modules/.prisma node_modules/@prisma
 USER vera
 
 ENV NODE_ENV=production
