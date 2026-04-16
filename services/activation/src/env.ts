@@ -1,9 +1,13 @@
-import { defineEnv, baseEnvShape, cardFieldCryptoEnvShape, hexKey } from '@vera/core';
+import { defineEnv, baseEnvShape, cardFieldCryptoEnvShape, authKeysJson, hexKey } from '@vera/core';
 import { z } from 'zod';
 
 const { get: getActivationConfig, reset: _resetActivationConfig } = defineEnv({
   ...baseEnvShape,
   ...cardFieldCryptoEnvShape,
+  // Inbound HMAC auth — provisioning-agent callers for POST /api/cards/*.
+  // Separate env var from vault's SERVICE_AUTH_KEYS because both services
+  // share one .env in dev; different caller sets, different key maps.
+  PROVISION_AUTH_KEYS: authKeysJson,
   // Activation is the only service that fingerprints UIDs (for collision
   // detection at register time).  Declared inline — no shared fragment.
   CARD_UID_FINGERPRINT_KEY: hexKey(32),

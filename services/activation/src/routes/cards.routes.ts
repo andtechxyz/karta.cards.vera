@@ -23,6 +23,7 @@ const registerSchema = z.object({
 });
 
 // POST /api/cards/register — called by Palisade's provisioning-agent.
+// Protected by requireSignedRequest (HMAC) at the mount point in index.ts.
 router.post('/register', validateBody(registerSchema), async (req, res) => {
   const result = await registerCard({
     ...req.body,

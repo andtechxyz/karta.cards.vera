@@ -12,6 +12,7 @@
     "@vera/db": "*",
     "@vera/handoff": "*",
     "@vera/retention": "*",
+    "@vera/service-auth": "*",
     "@vera/vault-client": "*",
     "@vera/webauthn": "*",
     "dotenv": "^16.4.5",

@@ -88,57 +88,65 @@ export const cardFieldCryptoEnvShape = {
 } as const;
 
 // -----------------------------------------------------------------------------
-// Service-to-service auth env shape.
+// Service-to-service auth env shapes.
 //
-// Vault (the server) holds a JSON-encoded map of caller keyId → 32-byte hex
-// secret.  One entry per legitimate caller (pay, activation).  Pay and
-// activation each hold their own single client secret under a service-specific
-// variable name declared in their own env.ts — there is no shared shape for
-// the client side because the two callers must have independent secrets.
+// Any service that accepts inbound HMAC-signed requests holds a JSON-encoded
+// map of caller keyId → 32-byte hex secret.  The vault uses SERVICE_AUTH_KEYS,
+// activation uses PROVISION_AUTH_KEYS for its provisioning endpoint.  Each
+// caller holds its own single client secret under a service-specific variable
+// name declared in its own env.ts.
 // -----------------------------------------------------------------------------
 
+/**
+ * Zod schema for a JSON-encoded `{ keyId: hexSecret }` map.  Reused by every
+ * service that verifies inbound HMAC-signed requests — each service binds it
+ * to its own env-var name.
+ */
+export const authKeysJson = z
+  .string()
+  .min(1)
+  .transform((raw, ctx): Record<string, string> => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'value must be a JSON object mapping keyId to hex secret',
+      });
+      return z.NEVER;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'value must be a JSON object',
+      });
+      return z.NEVER;
+    }
+    const out: Record<string, string> = {};
+    for (const [id, val] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof val !== 'string' || !/^[0-9a-fA-F]{64}$/.test(val)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `key "${id}" must be 32-byte hex (64 chars)`,
+        });
+        return z.NEVER;
+      }
+      out[id] = val;
+    }
+    if (Object.keys(out).length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'must declare at least one caller',
+      });
+      return z.NEVER;
+    }
+    return out;
+  });
+
+/** Vault's inbound auth shape — binds `authKeysJson` to `SERVICE_AUTH_KEYS`. */
 export const serviceAuthServerEnvShape = {
-  SERVICE_AUTH_KEYS: z
-    .string()
-    .min(1)
-    .transform((raw, ctx): Record<string, string> => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'SERVICE_AUTH_KEYS must be a JSON object mapping keyId to hex secret',
-        });
-        return z.NEVER;
-      }
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'SERVICE_AUTH_KEYS must be a JSON object',
-        });
-        return z.NEVER;
-      }
-      const out: Record<string, string> = {};
-      for (const [id, val] of Object.entries(parsed as Record<string, unknown>)) {
-        if (typeof val !== 'string' || !/^[0-9a-fA-F]{64}$/.test(val)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `SERVICE_AUTH_KEYS[${id}] must be 32-byte hex (64 chars)`,
-          });
-          return z.NEVER;
-        }
-        out[id] = val;
-      }
-      if (Object.keys(out).length === 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'SERVICE_AUTH_KEYS must declare at least one caller',
-        });
-        return z.NEVER;
-      }
-      return out;
-    }),
+  SERVICE_AUTH_KEYS: authKeysJson,
 } as const;
 
 /**
