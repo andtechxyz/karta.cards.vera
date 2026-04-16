@@ -42,6 +42,9 @@ jobs:
           cache: npm
 
       - run: npm ci
+      # Rebuild native binaries (rollup) for the CI runner's platform —
+      # package-lock.json may lack linux-x64 optional deps if generated on macOS.
+      - run: npm rebuild
       - run: npx prisma generate --schema packages/db/prisma/schema.prisma
       - run: npx tsc -b
       - run: npx vitest run
