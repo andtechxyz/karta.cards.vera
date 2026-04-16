@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { QRCodeCanvas } from 'qrcode.react';
 import { api, errorMsg, getAuthToken, clearAuthToken } from '../utils/api';
 import { formatDate, formatMoney } from '../utils/format';
 import { luhnValid } from '../utils/luhn';
@@ -199,8 +200,17 @@ export default function Admin() {
           </>)}
 
           {loginPhase === 'mfa_setup' && (<>
-            <p className="small">Scan this code in your authenticator app:</p>
-            <code style={{ display: 'block', padding: 8, background: '#f5f5f5', wordBreak: 'break-all', marginBottom: 8, fontSize: 12 }}>{mfaSecret}</code>
+            <p className="small">Scan this QR code in your authenticator app:</p>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 16, background: '#fff', borderRadius: 8, marginBottom: 12 }}>
+              <QRCodeCanvas
+                value={`otpauth://totp/karta.cards:${encodeURIComponent(email)}?secret=${mfaSecret}&issuer=karta.cards&algorithm=SHA1&digits=6&period=30`}
+                size={200}
+              />
+            </div>
+            <details style={{ marginBottom: 8 }}>
+              <summary className="small" style={{ cursor: 'pointer' }}>Can't scan? Enter manually</summary>
+              <code style={{ display: 'block', padding: 8, background: '#f5f5f5', wordBreak: 'break-all', marginTop: 4, fontSize: 12 }}>{mfaSecret}</code>
+            </details>
             <p className="small">Then enter the 6-digit code:</p>
             <input type="text" value={mfaCode} onChange={e => setMfaCode(e.target.value)} placeholder="123456" style={{ width: '100%', marginBottom: 8, padding: 8, textAlign: 'center', fontSize: 20, letterSpacing: 8 }} maxLength={6} onKeyDown={e => e.key === 'Enter' && handleMfaSetup()} />
             <button className="btn primary" onClick={handleMfaSetup} disabled={loginLoading} style={{ width: '100%' }}>{loginLoading ? 'Verifying...' : 'Verify & Enable MFA'}</button>
