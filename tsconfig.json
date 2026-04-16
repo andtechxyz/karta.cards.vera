@@ -9,6 +9,7 @@
     { "path": "./packages/programs" },
     { "path": "./packages/service-auth" },
     { "path": "./packages/retention" },
+    { "path": "./packages/emv" },
     { "path": "./services/tap" },
     { "path": "./services/activation" },
     { "path": "./services/pay" },
