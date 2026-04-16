@@ -140,7 +140,7 @@ export default function Admin() {
     setLoginError('');
     setLoginLoading(true);
     try {
-      const verifyResult = await cognitoAuth('VerifySoftwareToken', {
+      await cognitoAuth('VerifySoftwareToken', {
         Session: loginSession,
         UserCode: mfaCode,
         FriendlyDeviceName: 'Admin MFA',
