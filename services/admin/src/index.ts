@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { errorMiddleware, serveFrontend, apiRateLimit } from '@vera/core';
+import { createCognitoAuthMiddleware } from '@vera/cognito-auth';
 import { getAdminConfig } from './env.js';
 import { ADMIN_KEY_HEADER, requireAdminKey } from './middleware/require-admin-key.js';
 import programsRouter from './routes/programs.routes.js';
@@ -14,7 +15,7 @@ const config = getAdminConfig();
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: config.CORS_ORIGINS, credentials: false, allowedHeaders: ['content-type', ADMIN_KEY_HEADER] }));
+app.use(cors({ origin: config.CORS_ORIGINS, credentials: false, allowedHeaders: ['content-type', ADMIN_KEY_HEADER, 'authorization'] }));
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '64kb' }));
 
@@ -26,13 +27,16 @@ app.get('/api/health', (_req, res) => {
 // Rate limit all API routes before auth checks.
 app.use('/api', apiRateLimit);
 
-// Every admin surface is gated on X-Admin-Key.  Mount the gate once so any
-// route file added under /api/admin, /api/programs, /api/cards inherits it.
+// Cognito JWT verified first, then X-Admin-Key.  Both must pass.
+const cognitoAuth = createCognitoAuthMiddleware({
+  userPoolId: config.COGNITO_USER_POOL_ID,
+  clientId: config.COGNITO_CLIENT_ID,
+});
 const adminGate = requireAdminKey(config.ADMIN_API_KEY);
-app.use('/api/programs', adminGate, programsRouter);
-app.use('/api/cards', adminGate, cardsRouter);
-app.use('/api/admin/vault', adminGate, vaultProxyRouter);
-app.use('/api/admin', adminGate, provisioningRouter);
+app.use('/api/programs', cognitoAuth, adminGate, programsRouter);
+app.use('/api/cards', cognitoAuth, adminGate, cardsRouter);
+app.use('/api/admin/vault', cognitoAuth, adminGate, vaultProxyRouter);
+app.use('/api/admin', cognitoAuth, adminGate, provisioningRouter);
 
 serveFrontend(app, import.meta.url);
 app.use(errorMiddleware);

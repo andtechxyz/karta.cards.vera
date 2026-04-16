@@ -8,6 +8,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@vera/cognito-auth": "*",
     "@vera/core": "*",
     "@vera/db": "*",
     "@vera/programs": "*",

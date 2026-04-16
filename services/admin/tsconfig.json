@@ -6,6 +6,7 @@
     "composite": true
   },
   "references": [
+    { "path": "../../packages/cognito-auth" },
     { "path": "../../packages/core" },
     { "path": "../../packages/db" },
     { "path": "../../packages/programs" },

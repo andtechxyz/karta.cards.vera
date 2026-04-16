@@ -18,6 +18,9 @@ const { get: getAdminConfig, reset: _resetAdminConfig } = defineEnv({
   SERVICE_AUTH_ADMIN_SECRET: hexKey(32),
   // Activation leg — batch CSV ingestion calls activation's /api/cards/register.
   ACTIVATION_SERVICE_URL: z.string().url().default('http://localhost:3002'),
+  // Cognito MFA — second auth factor alongside X-Admin-Key.
+  COGNITO_USER_POOL_ID: z.string().default('ap-southeast-2_Db4d1vpIV'),
+  COGNITO_CLIENT_ID: z.string().default('7pj9230obhsa6h6vrvk9tru7do'),
 });
 
 export { getAdminConfig, _resetAdminConfig };

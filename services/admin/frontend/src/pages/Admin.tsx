@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, errorMsg } from '../utils/api';
+import { api, errorMsg, getAuthToken, clearAuthToken } from '../utils/api';
 import { formatDate, formatMoney } from '../utils/format';
 import { luhnValid } from '../utils/luhn';
 import { CREDENTIAL_KINDS, type CredentialKind } from '../utils/webauthn';
@@ -39,9 +39,50 @@ interface Card {
 
 export default function Admin() {
   const [tab, setTab] = useState<TabKey>('cards');
+  const [authToken, setAuthToken] = useState(getAuthToken() || '');
+  const [tokenInput, setTokenInput] = useState('');
+
+  if (!authToken) {
+    return (
+      <div className="page">
+        <div className="panel">
+          <h2>Admin Authentication</h2>
+          <p>Enter your Cognito access token (from AWS CLI or auth page):</p>
+          <input
+            type="password"
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder="Cognito access token"
+            style={{ width: '100%', marginBottom: 8 }}
+          />
+          <button
+            className="btn primary"
+            onClick={() => {
+              api.setAuthToken(tokenInput);
+              setAuthToken(tokenInput);
+            }}
+          >
+            Authenticate
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page">
-      <h1>Vera Admin</h1>
+      <div className="row" style={{ alignItems: 'center' }}>
+        <h1 style={{ margin: 0 }}>Vera Admin</h1>
+        <button
+          className="btn ghost"
+          onClick={() => {
+            clearAuthToken();
+            setAuthToken('');
+          }}
+        >
+          Logout
+        </button>
+      </div>
       <p className="small">Cards, vault, WebAuthn credentials, transactions, audit.</p>
       <div className="tabs">
         {(['cards', 'vault', 'programs', 'transactions', 'audit', 'chipProfiles', 'keyMgmt', 'batches', 'provMonitor'] as const).map((t) => (
@@ -1356,6 +1397,8 @@ function BatchesTab() {
       const adminKey = sessionStorage.getItem('vera.adminKey');
       const headers: Record<string, string> = {};
       if (adminKey) headers['x-admin-key'] = adminKey;
+      const token = getAuthToken();
+      if (token) headers['authorization'] = `Bearer ${token}`;
 
       const res = await fetch('/api/admin/batches/ingest', {
         method: 'POST',

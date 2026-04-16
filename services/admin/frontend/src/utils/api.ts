@@ -6,6 +6,7 @@
 // clears the stored key and triggers the App-level gate to re-prompt.
 
 const KEY_STORAGE = 'vera.adminKey';
+const TOKEN_STORAGE = 'admin_token';
 // Must match ADMIN_KEY_HEADER in services/admin/src/middleware/require-admin-key.ts.
 const ADMIN_KEY_HEADER = 'x-admin-key';
 
@@ -19,6 +20,18 @@ export function setAdminKey(key: string): void {
 
 export function clearAdminKey(): void {
   sessionStorage.removeItem(KEY_STORAGE);
+}
+
+export function getAuthToken(): string | null {
+  return localStorage.getItem(TOKEN_STORAGE);
+}
+
+export function setAuthToken(token: string): void {
+  localStorage.setItem(TOKEN_STORAGE, token);
+}
+
+export function clearAuthToken(): void {
+  localStorage.removeItem(TOKEN_STORAGE);
 }
 
 /**
@@ -51,6 +64,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (body) headers['content-type'] = 'application/json';
   const adminKey = getAdminKey();
   if (adminKey) headers[ADMIN_KEY_HEADER] = adminKey;
+  const authToken = getAuthToken();
+  if (authToken) headers['authorization'] = `Bearer ${authToken}`;
 
   const res = await fetch(`/api${path}`, {
     method,
@@ -79,6 +94,7 @@ export const api = {
   post: <T>(p: string, body?: unknown) => request<T>('POST', p, body),
   patch: <T>(p: string, body?: unknown) => request<T>('PATCH', p, body),
   delete: <T>(p: string) => request<T>('DELETE', p),
+  setAuthToken,
 };
 
 /** Format an error from `request()` (or any throw) for human display. */
