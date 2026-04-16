@@ -37,33 +37,182 @@ interface Card {
   activationSessions: ActivationSessionRow[];
 }
 
+const COGNITO_REGION = 'ap-southeast-2';
+const COGNITO_CLIENT_ID = '7pj9230obhsa6h6vrvk9tru7do';
+const COGNITO_ENDPOINT = `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/`;
+
+async function cognitoAuth(action: string, params: Record<string, unknown>) {
+  const resp = await fetch(COGNITO_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-amz-json-1.1',
+      'X-Amz-Target': `AWSCognitoIdentityProviderService.${action}`,
+    },
+    body: JSON.stringify(params),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.message || data.__type || 'Auth failed');
+  return data;
+}
+
 export default function Admin() {
   const [tab, setTab] = useState<TabKey>('cards');
   const [authToken, setAuthToken] = useState(getAuthToken() || '');
-  const [tokenInput, setTokenInput] = useState('');
+
+  // Login form state
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
+  const [loginPhase, setLoginPhase] = useState<'credentials' | 'new_password' | 'mfa_setup' | 'mfa_verify'>('credentials');
+  const [loginSession, setLoginSession] = useState('');
+  const [mfaSecret, setMfaSecret] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+
+  const handleLogin = async () => {
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const result = await cognitoAuth('InitiateAuth', {
+        AuthFlow: 'USER_PASSWORD_AUTH',
+        ClientId: COGNITO_CLIENT_ID,
+        AuthParameters: { USERNAME: email, PASSWORD: password },
+      });
+
+      if (result.ChallengeName === 'NEW_PASSWORD_REQUIRED') {
+        setLoginSession(result.Session);
+        setLoginPhase('new_password');
+      } else if (result.ChallengeName === 'MFA_SETUP') {
+        // Need to set up TOTP first
+        setLoginSession(result.Session);
+        const assocResult = await cognitoAuth('AssociateSoftwareToken', { Session: result.Session });
+        setMfaSecret(assocResult.SecretCode);
+        setLoginSession(assocResult.Session);
+        setLoginPhase('mfa_setup');
+      } else if (result.ChallengeName === 'SOFTWARE_TOKEN_MFA') {
+        setLoginSession(result.Session);
+        setLoginPhase('mfa_verify');
+      } else if (result.AuthenticationResult) {
+        const token = result.AuthenticationResult.AccessToken;
+        api.setAuthToken(token);
+        setAuthToken(token);
+      }
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'Login failed');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleNewPassword = async () => {
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const result = await cognitoAuth('RespondToAuthChallenge', {
+        ClientId: COGNITO_CLIENT_ID,
+        ChallengeName: 'NEW_PASSWORD_REQUIRED',
+        Session: loginSession,
+        ChallengeResponses: { USERNAME: email, NEW_PASSWORD: newPassword },
+      });
+
+      if (result.ChallengeName === 'MFA_SETUP') {
+        const assocResult = await cognitoAuth('AssociateSoftwareToken', { Session: result.Session });
+        setMfaSecret(assocResult.SecretCode);
+        setLoginSession(assocResult.Session);
+        setLoginPhase('mfa_setup');
+      } else if (result.ChallengeName === 'SOFTWARE_TOKEN_MFA') {
+        setLoginSession(result.Session);
+        setLoginPhase('mfa_verify');
+      } else if (result.AuthenticationResult) {
+        const token = result.AuthenticationResult.AccessToken;
+        api.setAuthToken(token);
+        setAuthToken(token);
+      }
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'Password change failed');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleMfaSetup = async () => {
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const verifyResult = await cognitoAuth('VerifySoftwareToken', {
+        Session: loginSession,
+        UserCode: mfaCode,
+        FriendlyDeviceName: 'Admin MFA',
+      });
+      // After setup, need to re-authenticate to get tokens
+      setLoginPhase('credentials');
+      setLoginError('MFA configured. Please sign in again.');
+      setPassword('');
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'MFA setup failed');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleMfaVerify = async () => {
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const result = await cognitoAuth('RespondToAuthChallenge', {
+        ClientId: COGNITO_CLIENT_ID,
+        ChallengeName: 'SOFTWARE_TOKEN_MFA',
+        Session: loginSession,
+        ChallengeResponses: { USERNAME: email, SOFTWARE_TOKEN_MFA_CODE: mfaCode },
+      });
+
+      if (result.AuthenticationResult) {
+        const token = result.AuthenticationResult.AccessToken;
+        api.setAuthToken(token);
+        setAuthToken(token);
+      }
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'MFA verification failed');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
 
   if (!authToken) {
     return (
       <div className="page">
-        <div className="panel">
-          <h2>Admin Authentication</h2>
-          <p>Enter your Cognito access token (from AWS CLI or auth page):</p>
-          <input
-            type="password"
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="Cognito access token"
-            style={{ width: '100%', marginBottom: 8 }}
-          />
-          <button
-            className="btn primary"
-            onClick={() => {
-              api.setAuthToken(tokenInput);
-              setAuthToken(tokenInput);
-            }}
-          >
-            Authenticate
-          </button>
+        <div className="panel" style={{ maxWidth: 400, margin: '40px auto' }}>
+          <h2>karta.cards Admin</h2>
+
+          {loginPhase === 'credentials' && (<>
+            <p className="small">Sign in with your Cognito credentials</p>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" style={{ width: '100%', marginBottom: 8, padding: 8 }} />
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" style={{ width: '100%', marginBottom: 8, padding: 8 }} onKeyDown={e => e.key === 'Enter' && handleLogin()} />
+            <button className="btn primary" onClick={handleLogin} disabled={loginLoading} style={{ width: '100%' }}>{loginLoading ? 'Signing in...' : 'Sign In'}</button>
+          </>)}
+
+          {loginPhase === 'new_password' && (<>
+            <p className="small">Set a new password (min 32 characters)</p>
+            <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="New password" style={{ width: '100%', marginBottom: 8, padding: 8 }} onKeyDown={e => e.key === 'Enter' && handleNewPassword()} />
+            <button className="btn primary" onClick={handleNewPassword} disabled={loginLoading} style={{ width: '100%' }}>{loginLoading ? 'Setting...' : 'Set Password'}</button>
+          </>)}
+
+          {loginPhase === 'mfa_setup' && (<>
+            <p className="small">Scan this code in your authenticator app:</p>
+            <code style={{ display: 'block', padding: 8, background: '#f5f5f5', wordBreak: 'break-all', marginBottom: 8, fontSize: 12 }}>{mfaSecret}</code>
+            <p className="small">Then enter the 6-digit code:</p>
+            <input type="text" value={mfaCode} onChange={e => setMfaCode(e.target.value)} placeholder="123456" style={{ width: '100%', marginBottom: 8, padding: 8, textAlign: 'center', fontSize: 20, letterSpacing: 8 }} maxLength={6} onKeyDown={e => e.key === 'Enter' && handleMfaSetup()} />
+            <button className="btn primary" onClick={handleMfaSetup} disabled={loginLoading} style={{ width: '100%' }}>{loginLoading ? 'Verifying...' : 'Verify & Enable MFA'}</button>
+          </>)}
+
+          {loginPhase === 'mfa_verify' && (<>
+            <p className="small">Enter your authenticator code</p>
+            <input type="text" value={mfaCode} onChange={e => setMfaCode(e.target.value)} placeholder="123456" style={{ width: '100%', marginBottom: 8, padding: 8, textAlign: 'center', fontSize: 20, letterSpacing: 8 }} maxLength={6} onKeyDown={e => e.key === 'Enter' && handleMfaVerify()} />
+            <button className="btn primary" onClick={handleMfaVerify} disabled={loginLoading} style={{ width: '100%' }}>{loginLoading ? 'Verifying...' : 'Verify'}</button>
+          </>)}
+
+          {loginError && <p style={{ color: '#e74c3c', marginTop: 8, fontSize: 14 }}>{loginError}</p>}
         </div>
       </div>
     );
