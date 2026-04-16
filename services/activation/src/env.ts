@@ -5,9 +5,8 @@ const { get: getActivationConfig, reset: _resetActivationConfig } = defineEnv({
   ...baseEnvShape,
   ...cardFieldCryptoEnvShape,
   CORS_ORIGINS: originList,
-  // Inbound HMAC auth — provisioning-agent callers for POST /api/cards/*.
-  // Separate env var from vault's SERVICE_AUTH_KEYS because both services
-  // share one .env in dev; different caller sets, different key maps.
+  // Separate from vault's SERVICE_AUTH_KEYS — both services share one .env in
+  // dev; different caller sets need different key maps.
   PROVISION_AUTH_KEYS: authKeysJson,
   // Activation is the only service that fingerprints UIDs (for collision
   // detection at register time).  Declared inline — no shared fragment.

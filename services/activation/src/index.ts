@@ -13,20 +13,21 @@ const app = express();
 
 app.use(cors({ origin: config.CORS_ORIGINS, credentials: false }));
 app.set('trust proxy', 1);
-// `verify` captures the raw body bytes so requireSignedRequest can hash them
-// for HMAC verification on provisioning-agent endpoints.
-app.use(express.json({ limit: '64kb', verify: captureRawBody }));
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'activation' });
 });
 
-app.use('/api/activation', activationRouter);
+// JSON parsing is per-route-group so the HMAC surface gets captureRawBody
+// while public activation routes skip the per-request Buffer copy.
+app.use('/api/activation', express.json({ limit: '64kb' }), activationRouter);
 
-// Provisioning-agent surface — PAN + UID + SDM keys arrive here.  HMAC-gated
-// so only callers with a key in PROVISION_AUTH_KEYS can register cards.
 const provisionGate = requireSignedRequest({ keys: config.PROVISION_AUTH_KEYS });
-app.use('/api/cards', provisionGate, cardsRouter);
+app.use('/api/cards',
+  express.json({ limit: '64kb', verify: captureRawBody }),
+  provisionGate,
+  cardsRouter,
+);
 
 serveFrontend(app, import.meta.url);
 app.use(errorMiddleware);

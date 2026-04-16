@@ -15,6 +15,7 @@ const HEX32_F = '5'.repeat(64);
 const HEX32_G = '6'.repeat(64);
 const HEX32_H = '7'.repeat(64);
 const HEX32_I = '8'.repeat(64);
+const HEX32_J = '9'.repeat(64);
 
 const defaults: Record<string, string> = {
   NODE_ENV: 'test',
@@ -50,8 +51,9 @@ const defaults: Record<string, string> = {
   SERVICE_AUTH_KEYS: JSON.stringify({ pay: HEX32_F, activation: HEX32_G, admin: HEX32_H }),
   // Provisioning-agent HMAC keys (activation inbound).
   PROVISION_AUTH_KEYS: JSON.stringify({ 'provision-agent': HEX32_I }),
-  // Admin browser-facing auth — static shared key sent as X-Admin-Key header.
-  ADMIN_API_KEY: HEX32_I,
+  // Admin browser-facing auth — must differ from PROVISION_AUTH_KEYS to catch
+  // accidental key-swap bugs.
+  ADMIN_API_KEY: HEX32_J,
   // CORS — all test origins.
   CORS_ORIGINS: 'https://pay.karta.cards,https://activation.karta.cards,https://admin.karta.cards',
 };

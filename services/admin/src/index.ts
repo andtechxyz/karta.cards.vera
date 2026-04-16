@@ -11,8 +11,6 @@ import vaultProxyRouter from './routes/vault-proxy.routes.js';
 const config = getAdminConfig();
 const app = express();
 
-// CORS allows the X-Admin-Key header from the browser.  Origin is wildcard
-// for the prototype; tighten to `admin.karta.cards` once the demo is settled.
 app.use(cors({ origin: config.CORS_ORIGINS, credentials: false, allowedHeaders: ['content-type', ADMIN_KEY_HEADER] }));
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '64kb' }));
