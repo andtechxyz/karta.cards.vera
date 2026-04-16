@@ -23,7 +23,7 @@ const defaults: Record<string, string> = {
   DATABASE_URL: 'postgresql://test:test@localhost:5432/vera_test?schema=public',
   WEBAUTHN_RP_ID: 'pay.karta.cards',
   WEBAUTHN_ORIGIN: 'https://pay.karta.cards',
-  WEBAUTHN_ORIGINS: 'https://pay.karta.cards,https://tap.karta.cards,https://activation.karta.cards,https://admin.karta.cards,https://vault.karta.cards',
+  WEBAUTHN_ORIGINS: 'https://pay.karta.cards,https://tap.karta.cards,https://activation.karta.cards,https://manage.karta.cards,https://vault.karta.cards',
   WEBAUTHN_RP_NAME: 'Palisade Pay',
   // Vault PAN keyspace (vault service only).
   VAULT_PAN_DEK_V1: HEX32_A,
@@ -55,7 +55,7 @@ const defaults: Record<string, string> = {
   // accidental key-swap bugs.
   ADMIN_API_KEY: HEX32_J,
   // CORS — all test origins.
-  CORS_ORIGINS: 'https://pay.karta.cards,https://activation.karta.cards,https://admin.karta.cards',
+  CORS_ORIGINS: 'https://pay.karta.cards,https://activation.karta.cards,https://manage.karta.cards',
 };
 
 for (const [k, v] of Object.entries(defaults)) {

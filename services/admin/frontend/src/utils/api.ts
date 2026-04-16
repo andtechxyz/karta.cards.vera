@@ -1,6 +1,6 @@
 // Minimal fetch wrapper.  Everything lives under /api and is served from the
 // same origin (Vite proxies to the admin backend in dev; Cloudflare Tunnel
-// collapses front+back behind admin.karta.cards in the demo).
+// collapses front+back behind manage.karta.cards in the demo).
 //
 // Every request carries X-Admin-Key from sessionStorage.  A 401 response
 // clears the stored key and triggers the App-level gate to re-prompt.

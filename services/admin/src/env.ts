@@ -8,7 +8,7 @@ const { get: getAdminConfig, reset: _resetAdminConfig } = defineEnv({
   ...baseEnvShape,
   CORS_ORIGINS: originList,
   PORT: z.coerce.number().int().positive().default(3005),
-  WEBAUTHN_ORIGIN: z.string().url().default('https://admin.karta.cards'),
+  WEBAUTHN_ORIGIN: z.string().url().default('https://manage.karta.cards'),
   // Browser-facing admin auth.  32-byte hex sent as X-Admin-Key header on every
   // admin API call.  Compared in constant time against this value; no roles,
   // no rotation, no sessions — minimum defensible auth for the prototype.

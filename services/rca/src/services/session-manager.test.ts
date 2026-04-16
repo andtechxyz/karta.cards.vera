@@ -49,10 +49,7 @@ const FAKE_SAD_RECORD = {
   status: 'READY',
 };
 
-// A 9000 response (success SW appended to data)
-const SUCCESS_RESPONSE_HEX = '9000';
-// A failure SW
-const FAILURE_RESPONSE_HEX = '6A82';
+
 
 function makeSession(phase: string, overrides: Record<string, unknown> = {}) {
   return {

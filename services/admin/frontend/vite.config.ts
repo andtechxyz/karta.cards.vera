@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     host: true,
     port: 5176,
-    allowedHosts: ['admin.karta.cards', 'localhost'],
+    allowedHosts: ['manage.karta.cards', 'localhost'],
     proxy: {
       // Admin API — programs CRUD, card PATCH, and the vault proxy that
       // signs HMAC requests to the vault service on the browser's behalf.

@@ -457,7 +457,7 @@ aws ecs register-task-definition \
       ],
       "environment": [
         { "name": "VAULT_SERVICE_URL",  "value": "http://${INTERNAL_ALB_DNS}:3004" },
-        { "name": "WEBAUTHN_ORIGIN",    "value": "https://admin.karta.cards" }
+        { "name": "WEBAUTHN_ORIGIN",    "value": "https://manage.karta.cards" }
       ],
       "secrets": [
         { "name": "DATABASE_URL",               "valueFrom": "${ARN_DATABASE_URL}" },
@@ -680,7 +680,7 @@ create_host_rule() {
 create_host_rule "$PUBLIC_LISTENER_ARN" "tap.karta.cards"        "$TG_ARN_tap"        1 "$EXISTING_RULES"
 create_host_rule "$PUBLIC_LISTENER_ARN" "activation.karta.cards" "$TG_ARN_activation" 2 "$EXISTING_RULES"
 create_host_rule "$PUBLIC_LISTENER_ARN" "pay.karta.cards"        "$TG_ARN_pay"        3 "$EXISTING_RULES"
-create_host_rule "$PUBLIC_LISTENER_ARN" "admin.karta.cards"      "$TG_ARN_admin"      4 "$EXISTING_RULES"
+create_host_rule "$PUBLIC_LISTENER_ARN" "manage.karta.cards"      "$TG_ARN_admin"      4 "$EXISTING_RULES"
 
 # ---- Internal ALB listener (HTTP:80) ----
 echo ""
@@ -846,7 +846,7 @@ if [ -n "$ACM_CERT_ARN" ] && [ "$ACM_CERT_ARN" != "None" ]; then
   create_host_rule "$PUBLIC_HTTPS_LISTENER_ARN" "tap.karta.cards"        "$TG_ARN_tap"        1 "$EXISTING_HTTPS_RULES"
   create_host_rule "$PUBLIC_HTTPS_LISTENER_ARN" "activation.karta.cards" "$TG_ARN_activation" 2 "$EXISTING_HTTPS_RULES"
   create_host_rule "$PUBLIC_HTTPS_LISTENER_ARN" "pay.karta.cards"        "$TG_ARN_pay"        3 "$EXISTING_HTTPS_RULES"
-  create_host_rule "$PUBLIC_HTTPS_LISTENER_ARN" "admin.karta.cards"      "$TG_ARN_admin"      4 "$EXISTING_HTTPS_RULES"
+  create_host_rule "$PUBLIC_HTTPS_LISTENER_ARN" "manage.karta.cards"      "$TG_ARN_admin"      4 "$EXISTING_HTTPS_RULES"
 
   # Redirect HTTP:80 → HTTPS:443 by updating the default action
   echo ""
@@ -995,7 +995,7 @@ echo "3. Ensure DNS records point to the public ALB:"
 echo "   - tap.karta.cards        -> $(echo "$PUBLIC_ALB_ARN" | sed 's/.*\///')"
 echo "   - activation.karta.cards -> (same)"
 echo "   - pay.karta.cards        -> (same)"
-echo "   - admin.karta.cards      -> (same)"
+echo "   - manage.karta.cards      -> (same)"
 echo ""
 echo "4. Ensure ECR repositories exist for each service:"
 echo "   vera-tap, vera-activation, vera-pay, vera-vault, vera-admin"
