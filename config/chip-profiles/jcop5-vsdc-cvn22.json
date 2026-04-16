@@ -1,0 +1,84 @@
+{
+  "profile_id": "jcop5_vsdc_cvn22",
+  "profile_name": "JCOP5 Visa VSDC qVSDC CVN 22",
+  "scheme": "vsdc",
+  "applet_vendor": "nxp",
+  "cvn": 22,
+
+  "elf_aid": "A0000000031010",
+  "module_aid": "A0000000031010",
+  "pa_aid": "D276000085504100",
+  "fido_aid": "A0000006472F0001",
+
+  "icc_private_key_dgi": 32769,
+  "icc_private_key_tag": 40776,
+  "mk_ac_dgi": 2048,
+  "mk_smi_dgi": 2049,
+  "mk_smc_dgi": 2050,
+
+  "dgi_definitions": [
+    {
+      "dgi_number": 257,
+      "name": "FCI Data",
+      "tags": [132, 80, 40722],
+      "mandatory": true,
+      "source": "per_profile"
+    },
+    {
+      "dgi_number": 512,
+      "name": "Per-card Application Data",
+      "tags": [90, 87, 24356, 24357, 24372, 40720],
+      "mandatory": true,
+      "source": "per_card"
+    },
+    {
+      "dgi_number": 513,
+      "name": "Application Constants",
+      "tags": [130, 148, 142, 40760, 140, 141, 40709, 40710, 40711, 40706, 40708, 40770],
+      "mandatory": true,
+      "source": "per_profile"
+    },
+    {
+      "dgi_number": 769,
+      "name": "Issuer PK Certificate",
+      "tags": [144, 146, 40754],
+      "mandatory": true,
+      "source": "per_profile"
+    },
+    {
+      "dgi_number": 770,
+      "name": "ICC PK Certificate",
+      "tags": [40774, 40776],
+      "mandatory": true,
+      "source": "per_provisioning"
+    },
+    {
+      "dgi_number": 2048,
+      "name": "MK-AC",
+      "tags": [],
+      "mandatory": true,
+      "source": "per_card"
+    },
+    {
+      "dgi_number": 2049,
+      "name": "MK-SMI",
+      "tags": [],
+      "mandatory": true,
+      "source": "per_card"
+    },
+    {
+      "dgi_number": 2050,
+      "name": "MK-SMC",
+      "tags": [],
+      "mandatory": true,
+      "source": "per_card"
+    },
+    {
+      "dgi_number": 32769,
+      "name": "ICC Private Key",
+      "tags": [],
+      "mandatory": true,
+      "source": "pa_internal"
+    }
+  ]
+}
