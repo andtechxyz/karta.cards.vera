@@ -23,22 +23,27 @@ Payment flow
    Browser (mobile)   ──▶  /pay/{rlid}  CustomerPayment: summary, Confirm & Pay
                                     │
                                     ▼  /api/auth/authenticate/verify
-   Backend (Node + Express + Prisma)
-       ├── sun/           NXP AN14683 PICC decrypt + CMAC verify + monotonic counter
-       ├── cards/         POST /api/cards/register entry point for provisioning-agent
-       ├── activation/    SUN session loader + WebAuthn begin/finish (CROSS_PLATFORM only)
+   5 backend services (Node + Express + Prisma, npm workspaces)
+       services/
+       ├── tap/           SUN-tap landing — NXP AN14683 PICC decrypt + CMAC + session mint
+       ├── activation/    Session begin/finish, card register, WebAuthn (CROSS_PLATFORM)
+       ├── pay/           Transactions, auth, ARQC, orchestration, SSE, providers
+       ├── vault/         Tokenise, fingerprint dedup, 60s retrieval tokens, audit, proxy
+       └── admin/         Programs CRUD, admin vault proxy, X-Admin-Key gate
+       packages/
+       ├── core/          Encryption, ApiError, validation, key-provider interface
+       ├── db/            Prisma schema + shared client
        ├── webauthn/      @simplewebauthn — CTAP1 for NFC, platform for Face ID
-       ├── orchestration/ post-auth.ts — the riskiest function: ARQC → token → tokenise → charge
-       ├── arqc/          BIN-derived OBO cryptogram — no per-card secrets
-       ├── vault/         tokenise, fingerprint dedup, 60s retrieval tokens, audit, proxy
-       ├── providers/     PaymentProvider interface — Stripe + Mock in the box
-       ├── transactions/  state machine, tier determination
-       └── realtime/      SSE bus with 15s heartbeat + late-subscriber replay
+       ├── programs/      Tier-rule engine + NDEF URL template resolution
+       ├── service-auth/  HMAC-SHA256 request signing + verification middleware
+       ├── vault-client/  Typed HMAC-signed HTTP client for the vault service
+       ├── retention/     PCI-DSS 3.1 TTL sweeps (purge fns + interval scheduler)
+       └── handoff/       QR + retrieval-link helpers
 ```
 
-Everything runs off a single Postgres database. See
-`/Users/danderson/.claude/plans/tingly-imagining-sketch.md` for the full
-design rationale.
+Everything runs off a single Postgres database. All service-to-service
+calls into the vault are HMAC-signed; the vault records the verified
+caller identity in every audit row (PCI-DSS 10.2.1).
 
 ## First run
 
@@ -46,25 +51,37 @@ design rationale.
 # 1) Postgres
 docker compose up -d
 
-# 2) Dependencies (backend + frontend)
+# 2) Dependencies — npm workspaces installs everything (packages/* + services/*)
 npm install
-npm --prefix frontend install
 
 # 3) Environment — copy and fill in secrets (all 32-byte hex; `openssl rand -hex 32` each)
 cp .env.example .env
-#   generate 3 keys and paste them in:
-#     VAULT_KEY_V1
-#     VAULT_FINGERPRINT_KEY
-#     VERA_ROOT_ARQC_SEED
+#   generate keys and paste them in:
+#     VAULT_KEY_V1, VAULT_FINGERPRINT_KEY, VERA_ROOT_ARQC_SEED
+#     SERVICE_AUTH_PAY_SECRET, SERVICE_AUTH_ACTIVATION_SECRET,
+#     SERVICE_AUTH_ADMIN_SECRET  (must match SERVICE_AUTH_KEYS JSON)
+#     ADMIN_API_KEY
 
 # 4) Prisma client + migrations
-npx prisma generate
-npx prisma migrate dev --name init
+npm run prisma:generate
+npm run prisma:migrate
 
-# 5) Start both processes
+# 5) Start all services + frontends (8 processes via concurrently)
 npm run dev
-#     backend :3000, frontend :5173
 ```
+
+Default ports:
+
+| Process | Port | Notes |
+|---|---|---|
+| tap (backend) | 3001 | SUN-tap landing, mints activation sessions |
+| activation (backend) | 3002 | Session begin/finish, card register |
+| pay (backend) | 3003 | Transactions, auth, orchestration, SSE |
+| vault (backend) | 3004 | Tokenise, retrieval tokens, audit, proxy |
+| admin (backend) | 3005 | Programs CRUD, admin vault proxy |
+| activation (frontend) | 5174 | `/activate?session=<token>` |
+| pay (frontend) | 5175 | MerchantCheckout + CustomerPayment |
+| admin (frontend) | 5176 | Admin dashboard |
 
 `PAYMENT_PROVIDER=mock` is the default — the system runs end-to-end without
 any Stripe keys. Flip to `stripe` + test keys when you want to hit the real
@@ -95,13 +112,13 @@ credentials-file: /Users/danderson/.cloudflared/<uuid>.json
 
 ingress:
   - hostname: pay.karta.cards
-    service: http://localhost:5173
+    service: http://localhost:5175
   - service: http_status:404
 ```
 
 Run: `cloudflared tunnel run vera-pay` (or `cloudflared service install` for
-always-on). Vite proxies `/api/*` to `:3000` so everything ends up on one
-origin.
+always-on). Vite proxies `/api/*` to `:3003` (pay backend) so everything
+ends up on one origin.
 
 ## Manual smoke test
 
@@ -146,11 +163,11 @@ curl -X POST https://pay.karta.cards/api/cards/register \
 ### Tier 2 smoke test (Android Chrome only)
 
 1. The demo cart totals AUD 87, which sits under Vera's default AUD 100 threshold (biometric only). To trigger the NFC-tap branch either:
-   - bump the cart in `frontend/src/pages/MerchantCheckout.tsx` above AUD 100, or
+   - bump the cart in `services/pay/frontend/src/pages/MerchantCheckout.tsx` above AUD 100, or
    - via Admin → Programs, link the card to a program with a lower `CROSS_PLATFORM` threshold.
 2. The SUN-tap activation already registered a CROSS_PLATFORM credential — no extra registration step needed.
 3. On Android Chrome, open `/pay/{rlid}` and tap the Palisade card against the back of the phone.
-4. The CTAP1 config in `src/webauthn/config.ts` is verbatim from New T4T — see the plan doc's "WebAuthn/NFC requirements" section before changing it.
+4. The CTAP1 config in `packages/webauthn/src/config.ts` is verbatim from New T4T — see the plan doc's "WebAuthn/NFC requirements" section before changing it.
 
 ### Stripe live-test mode
 
@@ -161,7 +178,7 @@ curl -X POST https://pay.karta.cards/api/cards/register \
 ### Unit tests
 
 ```bash
-npm test            # vitest run — 60+ unit tests, ~200ms
+npm test            # vitest run — 212 tests across 22 suites
 ```
 
 Coverage today (no DB / no network — pure crypto + in-process pub/sub):
@@ -193,7 +210,7 @@ Two sibling projects live under `~/Documents/Claude Code/` (mirrored into
 `external/` here as read-only references):
 
 - **`New T4T/`** — the original SUN-tap activation prototype (Python + Next.js).
-  Vera's `src/sun/` is a 1:1 port of `palisade-sun`'s `sun_validator.py` and
+  Vera's `services/tap/src/sun/` is a 1:1 port of `palisade-sun`'s `sun_validator.py` and
   `key_manager.py`, validated against the same NIST CMAC vectors and
   real-card PICC test vector. Vera runs its own WebAuthn RP — it does not
   call into New T4T's API for the prototype.
@@ -240,7 +257,7 @@ the tier.
 These are non-negotiable — every deviation in the New T4T history led to
 silent NFC failures or `NotAllowedError` with no diagnostic. Do not
 improvise; read `/Users/danderson/.claude/plans/tingly-imagining-sketch.md`
-before touching `src/webauthn/config.ts`.
+before touching `packages/webauthn/src/config.ts`.
 
 - **Android Chrome uses CTAP1 (U2F) over NFC, not CTAP2.**
 - Register with `authenticatorAttachment: 'cross-platform'`,
@@ -257,13 +274,17 @@ before touching `src/webauthn/config.ts`.
 
 - Plan: `/Users/danderson/.claude/plans/tingly-imagining-sketch.md`
 - Memory: `/Users/danderson/.claude/projects/-Users-danderson-Vera/memory/`
-- Schema: `prisma/schema.prisma`
-- SUN verifier (do not improvise — mirrors palisade-sun): `src/sun/`
-- Activation flow (begin/finish bound to opaque session token): `src/activation/`
-- Provisioning ingest: `src/cards/register.service.ts` + `src/routes/cards.routes.ts`
-- SUN-tap landing: `src/routes/sun-tap.routes.ts` (mounted at `/`, not `/api`)
-- Orchestration entry point: `src/orchestration/post-auth.ts`
-- Tiering: `src/transactions/tier.ts` (evaluates per-program `TierRuleSet`)
-- Program CRUD + NDEF URL resolution: `src/programs/` + `src/routes/programs.routes.ts`
-- Program defaults (AUD 100 bio/tap cutover): `DEFAULT_TIER_RULES` in `src/programs/tier-rules.ts`
-- WebAuthn config: `src/webauthn/config.ts` (CTAP1-verbatim — handle with care)
+- Schema: `packages/db/prisma/schema.prisma`
+- SUN verifier (do not improvise — mirrors palisade-sun): `services/tap/src/sun/`
+- Activation flow (begin/finish bound to opaque session token): `services/activation/src/routes/activation.routes.ts`
+- Provisioning ingest: `services/activation/src/cards/register.service.ts` + `services/activation/src/routes/cards.routes.ts`
+- SUN-tap landing: `services/tap/src/routes/sun-tap.routes.ts` (mounted at `/`, not `/api`)
+- Orchestration entry point: `services/pay/src/orchestration/post-auth.ts`
+- Tiering: `services/pay/src/transactions/tier.ts` (evaluates per-program `TierRuleSet`)
+- Program CRUD + NDEF URL resolution: `services/admin/src/programs/` + `services/admin/src/routes/programs.routes.ts`
+- Program defaults (AUD 100 bio/tap cutover): `DEFAULT_TIER_RULES` in `packages/programs/src/tier-rules.ts`
+- WebAuthn config: `packages/webauthn/src/config.ts` (CTAP1-verbatim — handle with care)
+- Vault client: `packages/vault-client/src/index.ts` (HMAC-signed HTTP to vault service)
+- Service auth: `packages/service-auth/src/index.ts` (signRequest / verifyRequest / requireSignedRequest)
+- Admin auth gate: `services/admin/src/middleware/require-admin-key.ts`
+- Retention sweeps: `packages/retention/src/` (purge fns + interval scheduler)

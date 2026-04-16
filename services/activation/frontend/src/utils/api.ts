@@ -24,8 +24,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (!res.ok) {
     throw new ApiError(
       res.status,
-      data?.code ?? 'unknown_error',
-      data?.message ?? res.statusText,
+      data?.error?.code ?? 'unknown_error',
+      data?.error?.message ?? res.statusText,
       data,
     );
   }
