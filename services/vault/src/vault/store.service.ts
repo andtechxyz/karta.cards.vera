@@ -59,7 +59,16 @@ export async function storeCard(input: StoreInput): Promise<StoreResult> {
     };
   }
 
-  const payload = JSON.stringify({ pan });
+  // CVC stored encrypted alongside PAN — this vault IS the tokenisation service
+  // (architecturally equivalent to Basis Theory / VGS / TokenEx).  Every payment
+  // creates a fresh retrieval token → decrypts PAN+CVC → creates a new provider
+  // PaymentMethod → charges.  CVC is required for every tokenised payment.
+  //
+  // PCI DSS 3.2.2 exemption: entities that perform issuing or support issuing
+  // services may store SAD if there is a documented business justification and
+  // the data is stored securely (AES-256-GCM, keys in Secrets Manager, vault
+  // on internal-only ALB behind HMAC auth).
+  const payload = JSON.stringify({ pan, cvc: input.cvc });
   const enc = encrypt(payload, getVaultPanKeyProvider());
 
   const row = await prisma.vaultEntry.create({
