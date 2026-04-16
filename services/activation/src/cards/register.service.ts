@@ -2,6 +2,7 @@ import { CardStatus } from '@prisma/client';
 import { prisma } from '@vera/db';
 import { encrypt, ApiError, conflict, internal } from '@vera/core';
 import { createVaultClient, VaultClientError, type VaultClient } from '@vera/vault-client';
+import { createProvisioningClient, ProvisioningClientError, type ProvisioningClient } from '@vera/provisioning-client';
 import { getActivationConfig } from '../env.js';
 import { fingerprintUid } from './fingerprint.js';
 import { getCardFieldKeyProvider } from './key-provider.js';
@@ -59,6 +60,19 @@ function getVaultClient(): VaultClient {
 /** Test hook — swap the vault client (or reset to env-derived default). */
 export function _setVaultClient(client: VaultClient | null): void {
   vaultClient = client;
+}
+
+// Lazy singleton — same pattern as vaultClient above.
+let provisioningClient: ProvisioningClient | null = null;
+function getProvisioningClient(): ProvisioningClient {
+  if (!provisioningClient) {
+    const config = getActivationConfig();
+    provisioningClient = createProvisioningClient(config.DATA_PREP_SERVICE_URL, {
+      keyId: 'activation',
+      secret: config.SERVICE_AUTH_PROVISIONING_SECRET,
+    });
+  }
+  return provisioningClient;
 }
 
 export async function registerCard(input: RegisterCardInput): Promise<RegisterCardResult> {
@@ -125,6 +139,25 @@ export async function registerCard(input: RegisterCardInput): Promise<RegisterCa
     },
     select: { id: true, cardRef: true, status: true },
   });
+
+  // Stage SAD for provisioning (non-blocking — registration succeeds even if data-prep is down)
+  if (input.programId) {
+    try {
+      const sadResult = await getProvisioningClient().prepareSad({
+        cardId: card.id,
+        pan: input.card.pan,
+        expiryYymm: input.card.expiryYear.slice(-2) + input.card.expiryMonth.padStart(2, '0'),
+        programId: input.programId,
+        chipSerial: input.chipSerial,
+      });
+      await prisma.card.update({
+        where: { id: card.id },
+        data: { proxyCardId: sadResult.proxyCardId },
+      });
+    } catch (err) {
+      console.warn(`[activation] SAD staging failed for card ${card.cardRef}:`, err instanceof ProvisioningClientError ? err.message : err);
+    }
+  }
 
   return {
     cardId: card.id,

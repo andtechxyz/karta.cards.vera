@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": ["TEAM_ID.com.mobile.karta.cards"],
+        "components": [
+          { "/": "/pay/*" }
+        ]
+      }
+    ]
+  }
+}

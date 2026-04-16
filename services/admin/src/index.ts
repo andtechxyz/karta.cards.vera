@@ -7,6 +7,7 @@ import { ADMIN_KEY_HEADER, requireAdminKey } from './middleware/require-admin-ke
 import programsRouter from './routes/programs.routes.js';
 import cardsRouter from './routes/cards.routes.js';
 import vaultProxyRouter from './routes/vault-proxy.routes.js';
+import provisioningRouter from './routes/provisioning.routes.js';
 
 const config = getAdminConfig();
 const app = express();
@@ -26,6 +27,7 @@ const adminGate = requireAdminKey(config.ADMIN_API_KEY);
 app.use('/api/programs', adminGate, programsRouter);
 app.use('/api/cards', adminGate, cardsRouter);
 app.use('/api/admin/vault', adminGate, vaultProxyRouter);
+app.use('/api/admin', adminGate, provisioningRouter);
 
 serveFrontend(app, import.meta.url);
 app.use(errorMiddleware);

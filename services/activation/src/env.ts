@@ -18,6 +18,8 @@ const { get: getActivationConfig, reset: _resetActivationConfig } = defineEnv({
   // Shared secret for HMAC-signed vault calls; must appear verbatim in the
   // vault service's SERVICE_AUTH_KEYS['activation'].
   SERVICE_AUTH_ACTIVATION_SECRET: hexKey(32),
+  DATA_PREP_SERVICE_URL: z.string().url().default('http://localhost:3006'),
+  SERVICE_AUTH_PROVISIONING_SECRET: hexKey(32).default('0'.repeat(64)),
 });
 
 export { getActivationConfig, _resetActivationConfig };

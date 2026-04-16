@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { validateBody, hexKey } from '@vera/core';
+import { validateBody, hexKey, badRequest, notFound } from '@vera/core';
+import { prisma } from '@vera/db';
 import { registerCard } from '../cards/index.js';
 
 const router: Router = Router();
@@ -29,6 +30,24 @@ router.post('/register', validateBody(registerSchema), async (req, res) => {
     ua: req.get('user-agent') ?? undefined,
   });
   res.status(201).json(result);
+});
+
+router.post('/:cardRef/provision-complete', async (req, res) => {
+  const { chipSerial } = req.body as { chipSerial?: string };
+  const card = await prisma.card.findUnique({ where: { cardRef: req.params.cardRef } });
+  if (!card) throw notFound('card_not_found', 'Unknown cardRef');
+  if (card.status !== 'ACTIVATED') throw badRequest('invalid_status', `Card is ${card.status}, expected ACTIVATED`);
+
+  await prisma.card.update({
+    where: { id: card.id },
+    data: {
+      status: 'PROVISIONED',
+      provisionedAt: new Date(),
+      chipSerial: chipSerial ?? card.chipSerial,
+    },
+  });
+
+  res.json({ cardRef: card.cardRef, status: 'PROVISIONED' });
 });
 
 export default router;

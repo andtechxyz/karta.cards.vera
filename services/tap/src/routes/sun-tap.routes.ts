@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { prisma } from '@vera/db';
 import { handleSunTap } from '../tap.service.js';
 import { getTapConfig } from '../env.js';
 
@@ -32,8 +33,26 @@ router.get('/activate/:cardRef', async (req, res) => {
       ip: req.ip,
       ua: req.get('user-agent') ?? undefined,
     });
-    // Fragment (#) so the token never reaches activation's server logs.
-    res.redirect(302, `${config.ACTIVATION_URL}/activate#hand=${encodeURIComponent(result.handoffToken)}`);
+
+    const token = encodeURIComponent(result.handoffToken);
+
+    // Look up the card's current status to decide where to redirect.
+    const card = await prisma.card.findUnique({
+      where: { cardRef },
+      select: { status: true, programId: true, program: { select: { postActivationNdefUrlTemplate: true } } },
+    });
+
+    if (card?.status === 'ACTIVATED') {
+      // Card is activated but not yet provisioned — send to provisioning app.
+      res.redirect(302, `${config.PROVISIONING_APP_URL}/provision#hand=${token}`);
+    } else if (card?.status === 'PROVISIONED') {
+      // Already provisioned — redirect to program payment URL or default.
+      const paymentUrl = card.program?.postActivationNdefUrlTemplate ?? config.ACTIVATION_URL;
+      res.redirect(302, paymentUrl);
+    } else {
+      // PERSONALISED or unknown — default activation flow.
+      res.redirect(302, `${config.ACTIVATION_URL}/activate#hand=${token}`);
+    }
   } catch (e) {
     const code =
       typeof e === 'object' && e !== null && 'code' in e

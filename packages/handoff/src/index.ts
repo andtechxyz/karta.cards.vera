@@ -18,7 +18,7 @@ export interface HandoffPayload {
   /** Subject — typically the Card.id.  Opaque to the verifying service. */
   sub: string;
   /** Purpose — e.g. 'activation', 'payment'.  Narrows acceptable next-step. */
-  purpose: 'activation' | 'payment';
+  purpose: 'activation' | 'payment' | 'provisioning';
   /** Issued-at, seconds since epoch. */
   iat: number;
   /** Expires-at, seconds since epoch.  Verifier rejects past this. */
