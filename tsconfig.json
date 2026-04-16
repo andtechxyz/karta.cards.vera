@@ -16,6 +16,7 @@
     { "path": "./services/pay" },
     { "path": "./services/vault" },
     { "path": "./services/admin" },
-    { "path": "./services/data-prep" }
+    { "path": "./services/data-prep" },
+    { "path": "./services/rca" }
   ]
 }
