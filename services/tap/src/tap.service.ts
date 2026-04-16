@@ -84,10 +84,17 @@ export async function handleSunTap(input: HandleSunTapInput): Promise<HandleSunT
   }
 
   const config = getTapConfig();
+
+  // Choose handoff purpose based on card status:
+  //   ACTIVATED cards → provisioning flow (mobile app)
+  //   Everything else → activation flow (WebAuthn registration)
+  const purpose: 'activation' | 'provisioning' =
+    card.status === 'ACTIVATED' ? 'provisioning' : 'activation';
+
   const handoffToken = signHandoff(
     {
       sub: card.id,
-      purpose: 'activation',
+      purpose,
       iss: 'tap',
       ttlSeconds: 30,
       ctx: { readCounter: result.counter },

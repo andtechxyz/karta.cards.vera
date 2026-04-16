@@ -20,6 +20,11 @@ const { get: getActivationConfig, reset: _resetActivationConfig } = defineEnv({
   SERVICE_AUTH_ACTIVATION_SECRET: hexKey(32),
   DATA_PREP_SERVICE_URL: z.string().url().default('http://localhost:3006'),
   SERVICE_AUTH_PROVISIONING_SECRET: hexKey(32).default('0'.repeat(64)),
+  // Palisade RCA endpoint for mobile provisioning
+  PALISADE_RCA_URL: z.string().url().optional(),
+  // AWS Cognito — mobile app JWT verification
+  COGNITO_USER_POOL_ID: z.string().default('ap-southeast-2_Db4d1vpIV'),
+  COGNITO_CLIENT_ID: z.string().default('7pj9230obhsa6h6vrvk9tru7do'),
 });
 
 export { getActivationConfig, _resetActivationConfig };

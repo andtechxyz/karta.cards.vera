@@ -7,6 +7,8 @@ import { purgeExpiredActivationSessions, startSweeper } from '@vera/retention';
 import { getActivationConfig } from './env.js';
 import activationRouter from './routes/activation.routes.js';
 import cardsRouter from './routes/cards.routes.js';
+import { createProvisioningRouter } from './routes/provisioning.routes.js';
+import { createCardsMineRouter } from './routes/cards-mine.routes.js';
 
 const config = getActivationConfig();
 const app = express();
@@ -22,11 +24,27 @@ app.get('/api/health', (_req, res) => {
 // while public activation routes skip the per-request Buffer copy.
 app.use('/api/activation', express.json({ limit: '64kb' }), activationRouter);
 
+// --- Mobile card list (Cognito-authed, no HMAC) ---
+// Mounted before /api/cards so the HMAC gate on /api/cards doesn't intercept.
+app.use('/api/cards/mine',
+  express.json({ limit: '64kb' }),
+  createCardsMineRouter(),
+);
+
 const provisionGate = requireSignedRequest({ keys: config.PROVISION_AUTH_KEYS });
 app.use('/api/cards',
   express.json({ limit: '64kb', verify: captureRawBody }),
   provisionGate,
   cardsRouter,
+);
+
+// --- Mobile provisioning ---
+// /start uses Cognito JWT auth (inside the router).
+// /callback uses HMAC (requireSignedRequest) — called by the RCA service.
+// captureRawBody is needed so the HMAC gate on /callback can hash-check.
+app.use('/api/provisioning',
+  express.json({ limit: '64kb', verify: captureRawBody }),
+  createProvisioningRouter(),
 );
 
 serveFrontend(app, import.meta.url);

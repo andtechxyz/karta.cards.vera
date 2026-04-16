@@ -21,6 +21,13 @@ export function serveFrontend(app: Express, serviceDir: string): void {
   const frontendDist = join(base, '..', 'frontend', 'dist');
   if (!existsSync(frontendDist)) return;
 
+  // Ensure .well-known/apple-app-site-association is served as JSON so iOS
+  // Universal Links picks it up without a file extension.
+  app.get('/.well-known/apple-app-site-association', (_req, res, next) => {
+    res.type('application/json');
+    next();
+  });
+
   app.use(express.static(frontendDist, { index: 'index.html' }));
 
   // SPA catch-all: any non-API GET that didn't match a static file gets

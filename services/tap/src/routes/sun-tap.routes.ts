@@ -44,7 +44,7 @@ router.get('/activate/:cardRef', async (req, res) => {
 
     if (card?.status === 'ACTIVATED') {
       // Card is activated but not yet provisioned — send to provisioning app.
-      res.redirect(302, `${config.PROVISIONING_APP_URL}/provision#hand=${token}`);
+      res.redirect(302, `${config.MOBILE_APP_URL}/provision#hand=${token}`);
     } else if (card?.status === 'PROVISIONED') {
       // Already provisioned — redirect to program payment URL or default.
       const paymentUrl = card.program?.postActivationNdefUrlTemplate ?? config.ACTIVATION_URL;

@@ -157,8 +157,12 @@ model Card {
   // --- Provisioning ----------------------------------------------------------
   // Stable identifier used by the data-prep and RCA services to reference
   // this card without exposing internal IDs.  Set when SAD is staged.
-  proxyCardId  String?   @unique
+  proxyCardId   String?   @unique
   provisionedAt DateTime?
+
+  // AWS Cognito user sub — set when card is provisioned via mobile app.
+  // Links a card to the cardholder's mobile identity for /api/cards/mine.
+  cognitoSub String?
 
   // ATC (application transaction counter) for OBO ARQC generation.  Monotonic.
   atc Int @default(0)
@@ -171,6 +175,8 @@ model Card {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([cognitoSub])
 }
 
 // Short-lived, single-use server-side session minted when the cardholder taps
@@ -566,8 +572,13 @@ model ProvisioningSession {
   id          String   @id @default(cuid())
   cardId      String
   card        Card     @relation(fields: [cardId], references: [id])
-  sadRecordId String
+  sadRecordId String   @default("")
   sadRecord   SadRecord @relation(fields: [sadRecordId], references: [id])
+
+  // Stable proxy card identifier — used by the RCA / data-prep services
+  proxyCardId  String   @default("")
+  // Session ID returned by the RCA when starting a mobile provisioning flow
+  rcaSessionId String?  @unique
 
   // INIT → PA_FCI → SCP11 → KEYGEN → SAD_TRANSFER → AWAITING_FINAL → CONFIRMING → COMPLETE | FAILED
   phase       String   @default("INIT")
