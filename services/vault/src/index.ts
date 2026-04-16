@@ -1,6 +1,5 @@
 import 'express-async-errors';
 import express from 'express';
-import cors from 'cors';
 import { errorMiddleware } from '@vera/core';
 import { captureRawBody, requireSignedRequest } from '@vera/service-auth';
 import { purgeExpiredRetrievalTokens, startSweeper } from '@vera/retention';
@@ -15,7 +14,8 @@ import cardsRouter from './routes/cards.routes.js';
 const config = getVaultConfig();
 const app = express();
 
-app.use(cors({ origin: '*', credentials: false }));
+// No CORS — vault is service-to-service only (internal ALB, HMAC-gated).
+// Browsers never call vault directly; admin proxies through its own backend.
 app.set('trust proxy', 1);
 // `verify` captures the raw body bytes so requireSignedRequest can hash them
 // without re-stringifying the parsed object (which is lossy — JSON key order

@@ -1,9 +1,10 @@
-import { defineEnv, baseEnvShape, cardFieldCryptoEnvShape, authKeysJson, hexKey } from '@vera/core';
+import { defineEnv, baseEnvShape, cardFieldCryptoEnvShape, authKeysJson, hexKey, originList } from '@vera/core';
 import { z } from 'zod';
 
 const { get: getActivationConfig, reset: _resetActivationConfig } = defineEnv({
   ...baseEnvShape,
   ...cardFieldCryptoEnvShape,
+  CORS_ORIGINS: originList,
   // Inbound HMAC auth — provisioning-agent callers for POST /api/cards/*.
   // Separate env var from vault's SERVICE_AUTH_KEYS because both services
   // share one .env in dev; different caller sets, different key maps.

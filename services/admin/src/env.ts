@@ -1,4 +1,4 @@
-import { defineEnv, baseEnvShape, hexKey } from '@vera/core';
+import { defineEnv, baseEnvShape, hexKey, originList } from '@vera/core';
 import { z } from 'zod';
 
 // Admin service handles program CRUD, card admin, and is the HMAC-signed
@@ -6,6 +6,7 @@ import { z } from 'zod';
 // PANs itself — vault owns that.
 const { get: getAdminConfig, reset: _resetAdminConfig } = defineEnv({
   ...baseEnvShape,
+  CORS_ORIGINS: originList,
   PORT: z.coerce.number().int().positive().default(3005),
   WEBAUTHN_ORIGIN: z.string().url().default('https://admin.karta.cards'),
   // Browser-facing admin auth.  32-byte hex sent as X-Admin-Key header on every

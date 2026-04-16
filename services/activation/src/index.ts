@@ -11,7 +11,7 @@ import cardsRouter from './routes/cards.routes.js';
 const config = getActivationConfig();
 const app = express();
 
-app.use(cors({ origin: '*', credentials: false }));
+app.use(cors({ origin: config.CORS_ORIGINS, credentials: false }));
 app.set('trust proxy', 1);
 // `verify` captures the raw body bytes so requireSignedRequest can hash them
 // for HMAC verification on provisioning-agent endpoints.

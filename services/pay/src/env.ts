@@ -1,8 +1,9 @@
-import { defineEnv, baseEnvShape, hexKey } from '@vera/core';
+import { defineEnv, baseEnvShape, hexKey, originList } from '@vera/core';
 import { z } from 'zod';
 
 const { get: getPayConfig, reset: _resetPayConfig } = defineEnv({
   ...baseEnvShape,
+  CORS_ORIGINS: originList,
   PORT: z.coerce.number().int().positive().default(3003),
   VAULT_SERVICE_URL: z.string().url().default('http://localhost:3004'),
   // Shared secret for HMAC-signed vault calls; must appear verbatim in the

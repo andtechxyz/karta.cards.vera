@@ -1,6 +1,5 @@
 import 'express-async-errors';
 import express from 'express';
-import cors from 'cors';
 import { errorMiddleware } from '@vera/core';
 import { getTapConfig } from './env.js';
 import sunTapRouter from './routes/sun-tap.routes.js';
@@ -8,7 +7,7 @@ import sunTapRouter from './routes/sun-tap.routes.js';
 const config = getTapConfig();
 const app = express();
 
-app.use(cors({ origin: '*', credentials: false }));
+// No CORS — tap handles NFC redirects only (GET → 302).  No browser fetch calls.
 app.set('trust proxy', 1);
 
 app.use(express.json({ limit: '64kb' }));

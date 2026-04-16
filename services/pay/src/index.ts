@@ -16,7 +16,7 @@ import webhooksRouter from './routes/webhooks/index.js';
 const config = getPayConfig();
 const app = express();
 
-app.use(cors({ origin: '*', credentials: false }));
+app.use(cors({ origin: config.CORS_ORIGINS, credentials: false }));
 app.set('trust proxy', 1);
 
 // Webhooks must get raw body BEFORE express.json()

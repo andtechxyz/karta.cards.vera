@@ -39,7 +39,8 @@ const defaults: Record<string, string> = {
   // Tap / handoff service
   TAP_HANDOFF_SECRET: HEX32_A,
   ACTIVATION_URL: 'https://activation.karta.cards',
-  // Vault service
+  // Service URLs
+  PAY_URL: 'https://pay.karta.cards',
   VAULT_SERVICE_URL: 'http://localhost:3004',
   // Service-to-service HMAC — distinct secret per caller; vault's map must
   // carry the same values under each caller's keyId.
@@ -47,8 +48,12 @@ const defaults: Record<string, string> = {
   SERVICE_AUTH_ACTIVATION_SECRET: HEX32_G,
   SERVICE_AUTH_ADMIN_SECRET: HEX32_H,
   SERVICE_AUTH_KEYS: JSON.stringify({ pay: HEX32_F, activation: HEX32_G, admin: HEX32_H }),
+  // Provisioning-agent HMAC keys (activation inbound).
+  PROVISION_AUTH_KEYS: JSON.stringify({ 'provision-agent': HEX32_I }),
   // Admin browser-facing auth — static shared key sent as X-Admin-Key header.
   ADMIN_API_KEY: HEX32_I,
+  // CORS — all test origins.
+  CORS_ORIGINS: 'https://pay.karta.cards,https://activation.karta.cards,https://admin.karta.cards',
 };
 
 for (const [k, v] of Object.entries(defaults)) {
