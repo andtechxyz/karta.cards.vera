@@ -2,7 +2,7 @@ import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { errorMiddleware, serveFrontend } from '@vera/core';
+import { errorMiddleware, serveFrontend, authRateLimit, apiRateLimit } from '@vera/core';
 import {
   expirePendingTransactions,
   purgeExpiredRegistrationChallenges,
@@ -33,10 +33,10 @@ app.get('/api/health', (_req, res) => {
 
 // Registration endpoints are admin-only (credential provisioning).
 const adminGate = requireAdminKey(config.ADMIN_API_KEY);
-app.use('/api/auth/register', adminGate, authRegisterRouter);
+app.use('/api/auth/register', authRateLimit, adminGate, authRegisterRouter);
 // Authentication endpoints are public (customer payment flow).
-app.use('/api/auth/authenticate', authAuthenticateRouter);
-app.use('/api/transactions', transactionsRouter);
+app.use('/api/auth/authenticate', authRateLimit, authAuthenticateRouter);
+app.use('/api/transactions', apiRateLimit, transactionsRouter);
 app.use('/api/payment', paymentRouter);
 
 serveFrontend(app, import.meta.url);

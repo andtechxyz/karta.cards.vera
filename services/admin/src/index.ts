@@ -2,7 +2,7 @@ import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { errorMiddleware, serveFrontend } from '@vera/core';
+import { errorMiddleware, serveFrontend, apiRateLimit } from '@vera/core';
 import { getAdminConfig } from './env.js';
 import { ADMIN_KEY_HEADER, requireAdminKey } from './middleware/require-admin-key.js';
 import programsRouter from './routes/programs.routes.js';
@@ -22,6 +22,9 @@ app.use(express.json({ limit: '64kb' }));
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'admin' });
 });
+
+// Rate limit all API routes before auth checks.
+app.use('/api', apiRateLimit);
 
 // Every admin surface is gated on X-Admin-Key.  Mount the gate once so any
 // route file added under /api/admin, /api/programs, /api/cards inherits it.

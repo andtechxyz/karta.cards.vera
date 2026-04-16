@@ -59,7 +59,7 @@ export async function storeCard(input: StoreInput): Promise<StoreResult> {
     };
   }
 
-  const payload = JSON.stringify({ pan, cvc: input.cvc });
+  const payload = JSON.stringify({ pan });
   const enc = encrypt(payload, getVaultPanKeyProvider());
 
   const row = await prisma.vaultEntry.create({

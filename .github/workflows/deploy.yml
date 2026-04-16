@@ -41,6 +41,8 @@ jobs:
           node-version: 22
 
       - run: npm ci
+      - run: npm audit --audit-level=high
+        continue-on-error: true
       - run: npx prisma generate --schema packages/db/prisma/schema.prisma
       - run: npx tsc -b
       - run: npx vitest run

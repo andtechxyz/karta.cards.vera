@@ -1,6 +1,6 @@
 import 'express-async-errors';
 import express from 'express';
-import { errorMiddleware } from '@vera/core';
+import { errorMiddleware, authRateLimit } from '@vera/core';
 import { getTapConfig } from './env.js';
 import sunTapRouter from './routes/sun-tap.routes.js';
 
@@ -17,7 +17,8 @@ app.get('/api/health', (_req, res) => {
 });
 
 // SUN-tap — mounted at root because the URL baked into the NFC chip has
-// no /api prefix.
+// no /api prefix.  Rate-limit to prevent replay brute-force.
+app.use('/activate', authRateLimit);
 app.use('/', sunTapRouter);
 
 app.use(errorMiddleware);

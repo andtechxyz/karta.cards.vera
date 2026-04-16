@@ -2,7 +2,7 @@ import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { errorMiddleware, serveFrontend } from '@vera/core';
+import { errorMiddleware, serveFrontend, authRateLimit, apiRateLimit } from '@vera/core';
 import { captureRawBody, requireSignedRequest } from '@vera/service-auth';
 import { purgeExpiredActivationSessions, startSweeper } from '@vera/retention';
 import { getActivationConfig } from './env.js';
@@ -24,12 +24,13 @@ app.get('/api/health', (_req, res) => {
 
 // JSON parsing is per-route-group so the HMAC surface gets captureRawBody
 // while public activation routes skip the per-request Buffer copy.
-app.use('/api/activation', express.json({ limit: '64kb' }), activationRouter);
+app.use('/api/activation', express.json({ limit: '64kb' }), authRateLimit, activationRouter);
 
 // --- Mobile card list (Cognito-authed, no HMAC) ---
 // Mounted before /api/cards so the HMAC gate on /api/cards doesn't intercept.
 app.use('/api/cards/mine',
   express.json({ limit: '64kb' }),
+  apiRateLimit,
   createCardsMineRouter(),
 );
 
@@ -46,6 +47,7 @@ app.use('/api/cards',
 // captureRawBody is needed so the HMAC gate on /callback can hash-check.
 app.use('/api/provisioning',
   express.json({ limit: '64kb', verify: captureRawBody }),
+  authRateLimit,
   createProvisioningRouter(),
 );
 
