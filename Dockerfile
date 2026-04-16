@@ -10,6 +10,10 @@
 # --- Stage 1: install + compile everything -----------------------------------
 FROM node:22-alpine AS builder
 
+# OpenSSL is needed so `prisma generate` detects the correct engine
+# binary (linux-musl-openssl-3.0.x) instead of defaulting to 1.1.x.
+RUN apk add --no-cache openssl
+
 WORKDIR /app
 
 # Copy workspace root files first (for npm ci cache efficiency)
@@ -62,7 +66,7 @@ RUN if [ -d "services/${SERVICE}/frontend/src" ]; then \
 # --- Stage 2: production image (only what the target SERVICE needs) ----------
 FROM node:22-alpine AS runner
 
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini openssl
 WORKDIR /app
 
 # Copy the whole workspace — npm workspaces resolves via symlinks in
