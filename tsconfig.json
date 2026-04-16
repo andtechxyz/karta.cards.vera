@@ -15,6 +15,7 @@
     { "path": "./services/activation" },
     { "path": "./services/pay" },
     { "path": "./services/vault" },
-    { "path": "./services/admin" }
+    { "path": "./services/admin" },
+    { "path": "./services/data-prep" }
   ]
 }
