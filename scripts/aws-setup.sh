@@ -655,6 +655,61 @@ else
   echo "  [updated] HTTP:3004 default action -> vera-vault"
 fi
 
+# ---- Public ALB HTTPS:443 listener (requires validated ACM cert) ----
+echo ""
+echo "--- Public ALB (HTTPS:443) ---"
+
+ACM_CERT_ARN=$(aws acm list-certificates \
+  --region "$REGION" \
+  --query "CertificateSummaryList[?DomainName=='karta.cards' && Status=='ISSUED'].CertificateArn | [0]" \
+  --output text 2>/dev/null || true)
+
+if [ -n "$ACM_CERT_ARN" ] && [ "$ACM_CERT_ARN" != "None" ]; then
+  PUBLIC_HTTPS_LISTENER_ARN=$(aws elbv2 describe-listeners \
+    --load-balancer-arn "$PUBLIC_ALB_ARN" \
+    --region "$REGION" \
+    --query "Listeners[?Port==\`443\`].ListenerArn | [0]" \
+    --output text 2>/dev/null || true)
+
+  if [ -z "$PUBLIC_HTTPS_LISTENER_ARN" ] || [ "$PUBLIC_HTTPS_LISTENER_ARN" = "None" ]; then
+    PUBLIC_HTTPS_LISTENER_ARN=$(aws elbv2 create-listener \
+      --load-balancer-arn "$PUBLIC_ALB_ARN" \
+      --protocol HTTPS \
+      --port 443 \
+      --certificates "CertificateArn=${ACM_CERT_ARN}" \
+      --default-actions "Type=fixed-response,FixedResponseConfig={StatusCode=404,ContentType=text/plain,MessageBody=Not Found}" \
+      --region "$REGION" \
+      --query 'Listeners[0].ListenerArn' \
+      --output text)
+    echo "  [created] Public HTTPS:443 listener"
+  else
+    echo "  [exists] Public HTTPS:443 listener ($PUBLIC_HTTPS_LISTENER_ARN)"
+  fi
+
+  # Add the same host-header rules to the HTTPS listener
+  EXISTING_HTTPS_RULES=$(aws elbv2 describe-rules \
+    --listener-arn "$PUBLIC_HTTPS_LISTENER_ARN" \
+    --region "$REGION" \
+    --output json)
+
+  create_host_rule "$PUBLIC_HTTPS_LISTENER_ARN" "tap.karta.cards"        "$TG_ARN_tap"        1 "$EXISTING_HTTPS_RULES"
+  create_host_rule "$PUBLIC_HTTPS_LISTENER_ARN" "activation.karta.cards" "$TG_ARN_activation" 2 "$EXISTING_HTTPS_RULES"
+  create_host_rule "$PUBLIC_HTTPS_LISTENER_ARN" "pay.karta.cards"        "$TG_ARN_pay"        3 "$EXISTING_HTTPS_RULES"
+  create_host_rule "$PUBLIC_HTTPS_LISTENER_ARN" "admin.karta.cards"      "$TG_ARN_admin"      4 "$EXISTING_HTTPS_RULES"
+
+  # Redirect HTTP:80 → HTTPS:443 by updating the default action
+  echo ""
+  echo "  Updating HTTP:80 default action to redirect -> HTTPS"
+  aws elbv2 modify-listener \
+    --listener-arn "$PUBLIC_LISTENER_ARN" \
+    --default-actions 'Type=redirect,RedirectConfig={Protocol=HTTPS,Port=443,StatusCode=HTTP_301}' \
+    --region "$REGION" \
+    --output text > /dev/null 2>&1 || true
+else
+  echo "  [skip] No validated ACM cert for karta.cards in $REGION"
+  echo "  Run this script again after the certificate is issued."
+fi
+
 # ===========================================================================
 echo ""
 echo "============================================================"
