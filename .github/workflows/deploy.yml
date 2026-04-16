@@ -66,6 +66,10 @@ jobs:
             port: 3004
           - service: admin
             port: 3005
+          - service: data-prep
+            port: 3006
+          - service: rca
+            port: 3007
 
     env:
       IMAGE_TAG: ${{ github.sha }}

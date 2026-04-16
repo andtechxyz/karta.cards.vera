@@ -28,11 +28,16 @@ COPY packages/vault-client/package.json      packages/vault-client/
 COPY packages/programs/package.json          packages/programs/
 COPY packages/service-auth/package.json      packages/service-auth/
 COPY packages/retention/package.json         packages/retention/
+COPY packages/emv/package.json              packages/emv/
+COPY packages/provisioning-client/package.json packages/provisioning-client/
+COPY packages/cognito-auth/package.json     packages/cognito-auth/
 COPY services/tap/package.json               services/tap/
 COPY services/activation/package.json        services/activation/
 COPY services/pay/package.json               services/pay/
 COPY services/vault/package.json             services/vault/
 COPY services/admin/package.json             services/admin/
+COPY services/data-prep/package.json        services/data-prep/
+COPY services/rca/package.json              services/rca/
 COPY services/activation/frontend/package.json services/activation/frontend/
 COPY services/pay/frontend/package.json      services/pay/frontend/
 COPY services/admin/frontend/package.json    services/admin/frontend/
@@ -93,6 +98,12 @@ COPY --from=builder /app/packages/service-auth/dist/   packages/service-auth/dis
 COPY --from=builder /app/packages/service-auth/package.json packages/service-auth/
 COPY --from=builder /app/packages/retention/dist/      packages/retention/dist/
 COPY --from=builder /app/packages/retention/package.json packages/retention/
+COPY --from=builder /app/packages/emv/dist/            packages/emv/dist/
+COPY --from=builder /app/packages/emv/package.json     packages/emv/
+COPY --from=builder /app/packages/provisioning-client/dist/ packages/provisioning-client/dist/
+COPY --from=builder /app/packages/provisioning-client/package.json packages/provisioning-client/
+COPY --from=builder /app/packages/cognito-auth/dist/   packages/cognito-auth/dist/
+COPY --from=builder /app/packages/cognito-auth/package.json packages/cognito-auth/
 
 # Copy the target service's compiled output
 ARG SERVICE

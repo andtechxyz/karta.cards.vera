@@ -182,6 +182,13 @@ ensure_secret "vera/STRIPE_PUBLISHABLE_KEY"      "CHANGEME"
 ensure_secret "vera/TRANSACTION_TTL_SECONDS"     "CHANGEME"
 ensure_secret "vera/RETRIEVAL_TOKEN_TTL_SECONDS" "CHANGEME"
 
+# New secrets for provisioning services
+ensure_secret "vera/KMS_SAD_KEY_ARN"            "CHANGEME"
+ensure_secret "vera/SERVICE_AUTH_PROVISIONING_SECRET" "CHANGEME"
+ensure_secret "vera/DATA_PREP_SERVICE_URL"      "http://internal-vera-internal-886106335.ap-southeast-2.elb.amazonaws.com:3006"
+ensure_secret "vera/RCA_SERVICE_URL"            "http://internal-vera-internal-886106335.ap-southeast-2.elb.amazonaws.com:3007"
+ensure_secret "vera/CALLBACK_HMAC_SECRET"       "CHANGEME"
+
 # ===========================================================================
 echo ""
 echo "============================================================"
@@ -189,7 +196,7 @@ echo " 2. CLOUDWATCH LOG GROUPS"
 echo "============================================================"
 # ===========================================================================
 
-for svc in tap activation pay vault admin; do
+for svc in tap activation pay vault admin data-prep rca; do
   ensure_log_group "/ecs/vera-${svc}"
 done
 
@@ -227,6 +234,9 @@ ARN_VAULT_PAN_FINGERPRINT_KEY=$(get_secret_arn "vera/VAULT_PAN_FINGERPRINT_KEY")
 ARN_SERVICE_AUTH_KEYS=$(get_secret_arn "vera/SERVICE_AUTH_KEYS")
 ARN_RETRIEVAL_TOKEN_TTL_SECONDS=$(get_secret_arn "vera/RETRIEVAL_TOKEN_TTL_SECONDS")
 ARN_ADMIN_API_KEY=$(get_secret_arn "vera/ADMIN_API_KEY")
+ARN_KMS_SAD_KEY_ARN=$(get_secret_arn "vera/KMS_SAD_KEY_ARN")
+ARN_SERVICE_AUTH_PROVISIONING_SECRET=$(get_secret_arn "vera/SERVICE_AUTH_PROVISIONING_SECRET")
+ARN_CALLBACK_HMAC_SECRET=$(get_secret_arn "vera/CALLBACK_HMAC_SECRET")
 echo "  All secret ARNs resolved."
 
 # ---- tap (port 3001) ----
@@ -470,6 +480,85 @@ TASKJSON
 )" --query 'taskDefinition.taskDefinitionArn' --output text
 REGISTERED_TASK_DEFS+=("vera-admin")
 
+# --- data-prep (port 3006, internal, HMAC-gated) ---
+aws ecs register-task-definition --cli-input-json "$(cat <<TASKJSON
+{
+  "family": "vera-data-prep",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "${EXEC_ROLE}",
+  "containerDefinitions": [
+    {
+      "name": "vera-data-prep",
+      "image": "${ECR_BASE}/vera-data-prep:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 3006, "protocol": "tcp" }
+      ],
+      "environment": [],
+      "secrets": [
+        { "name": "DATABASE_URL",                   "valueFrom": "${ARN_DATABASE_URL}" },
+        { "name": "PROVISION_AUTH_KEYS",             "valueFrom": "${ARN_PROVISION_AUTH_KEYS}" },
+        { "name": "KMS_SAD_KEY_ARN",                "valueFrom": "${ARN_KMS_SAD_KEY_ARN}" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vera-data-prep",
+          "awslogs-region": "${REGION}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+TASKJSON
+)" --query 'taskDefinition.taskDefinitionArn' --output text
+REGISTERED_TASK_DEFS+=("vera-data-prep")
+
+# --- rca (port 3007, internal, WebSocket + HMAC-gated) ---
+aws ecs register-task-definition --cli-input-json "$(cat <<TASKJSON
+{
+  "family": "vera-rca",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "${EXEC_ROLE}",
+  "containerDefinitions": [
+    {
+      "name": "vera-rca",
+      "image": "${ECR_BASE}/vera-rca:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 3007, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "DATA_PREP_SERVICE_URL", "value": "http://${INTERNAL_ALB_DNS}:3006" },
+        { "name": "ACTIVATION_CALLBACK_URL", "value": "http://${INTERNAL_ALB_DNS}:3002" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL",                   "valueFrom": "${ARN_DATABASE_URL}" },
+        { "name": "PROVISION_AUTH_KEYS",             "valueFrom": "${ARN_PROVISION_AUTH_KEYS}" },
+        { "name": "CALLBACK_HMAC_SECRET",           "valueFrom": "${ARN_CALLBACK_HMAC_SECRET}" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vera-rca",
+          "awslogs-region": "${REGION}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+TASKJSON
+)" --query 'taskDefinition.taskDefinitionArn' --output text
+REGISTERED_TASK_DEFS+=("vera-rca")
+
 # ===========================================================================
 echo ""
 echo "============================================================"
@@ -480,11 +569,12 @@ echo "============================================================"
 svc_port() {
   case "$1" in
     tap) echo 3001 ;; activation) echo 3002 ;; pay) echo 3003 ;;
-    vault) echo 3004 ;; admin) echo 3005 ;;
+    vault) echo 3004 ;; admin) echo 3005 ;; data-prep) echo 3006 ;;
+    rca) echo 3007 ;;
   esac
 }
 
-for svc in tap activation pay vault admin; do
+for svc in tap activation pay vault admin data-prep rca; do
   TG_NAME="vera-${svc}"
   PORT=$(svc_port "$svc")
 
@@ -515,8 +605,9 @@ for svc in tap activation pay vault admin; do
     echo "  [created] Target group $TG_NAME ($EXISTING_TG)"
   fi
 
-  # Store the ARN for later use
-  eval "TG_ARN_${svc}=\$EXISTING_TG"
+  # Store the ARN for later use (sanitize hyphen for bash variable name)
+  local var_name="${svc//-/_}"
+  eval "TG_ARN_${var_name}=\$EXISTING_TG"
 done
 
 # ===========================================================================
@@ -655,6 +746,66 @@ else
   echo "  [updated] HTTP:3004 default action -> vera-vault"
 fi
 
+# ---- Internal ALB (HTTP:3006 for data-prep) ----
+echo ""
+echo "--- Internal ALB (HTTP:3006 for data-prep) ---"
+
+INTERNAL_3006_LISTENER_ARN=$(aws elbv2 describe-listeners \
+  --load-balancer-arn "$INTERNAL_ALB_ARN" \
+  --region "$REGION" \
+  --query "Listeners[?Port==\`3006\`].ListenerArn | [0]" \
+  --output text 2>/dev/null || true)
+
+if [ -z "$INTERNAL_3006_LISTENER_ARN" ] || [ "$INTERNAL_3006_LISTENER_ARN" = "None" ]; then
+  INTERNAL_3006_LISTENER_ARN=$(aws elbv2 create-listener \
+    --load-balancer-arn "$INTERNAL_ALB_ARN" \
+    --protocol HTTP \
+    --port 3006 \
+    --default-actions "Type=forward,TargetGroupArn=${TG_ARN_data_prep}" \
+    --region "$REGION" \
+    --query 'Listeners[0].ListenerArn' \
+    --output text)
+  echo "  [created] Internal HTTP:3006 listener -> vera-data-prep"
+else
+  echo "  [exists] Internal HTTP:3006 listener ($INTERNAL_3006_LISTENER_ARN)"
+  aws elbv2 modify-listener \
+    --listener-arn "$INTERNAL_3006_LISTENER_ARN" \
+    --default-actions "Type=forward,TargetGroupArn=${TG_ARN_data_prep}" \
+    --region "$REGION" \
+    --output text > /dev/null
+  echo "  [updated] HTTP:3006 default action -> vera-data-prep"
+fi
+
+# ---- Internal ALB (HTTP:3007 for rca) ----
+echo ""
+echo "--- Internal ALB (HTTP:3007 for rca) ---"
+
+INTERNAL_3007_LISTENER_ARN=$(aws elbv2 describe-listeners \
+  --load-balancer-arn "$INTERNAL_ALB_ARN" \
+  --region "$REGION" \
+  --query "Listeners[?Port==\`3007\`].ListenerArn | [0]" \
+  --output text 2>/dev/null || true)
+
+if [ -z "$INTERNAL_3007_LISTENER_ARN" ] || [ "$INTERNAL_3007_LISTENER_ARN" = "None" ]; then
+  INTERNAL_3007_LISTENER_ARN=$(aws elbv2 create-listener \
+    --load-balancer-arn "$INTERNAL_ALB_ARN" \
+    --protocol HTTP \
+    --port 3007 \
+    --default-actions "Type=forward,TargetGroupArn=${TG_ARN_rca}" \
+    --region "$REGION" \
+    --query 'Listeners[0].ListenerArn' \
+    --output text)
+  echo "  [created] Internal HTTP:3007 listener -> vera-rca"
+else
+  echo "  [exists] Internal HTTP:3007 listener ($INTERNAL_3007_LISTENER_ARN)"
+  aws elbv2 modify-listener \
+    --listener-arn "$INTERNAL_3007_LISTENER_ARN" \
+    --default-actions "Type=forward,TargetGroupArn=${TG_ARN_rca}" \
+    --region "$REGION" \
+    --output text > /dev/null
+  echo "  [updated] HTTP:3007 default action -> vera-rca"
+fi
+
 # ---- Public ALB HTTPS:443 listener (requires validated ACM cert) ----
 echo ""
 echo "--- Public ALB (HTTPS:443) ---"
@@ -717,10 +868,11 @@ echo " 6. ECS SERVICES"
 echo "============================================================"
 # ===========================================================================
 
-for svc in tap activation pay vault admin; do
+for svc in tap activation pay vault admin data-prep rca; do
   SVC_NAME="vera-${svc}"
   PORT=$(svc_port "$svc")
-  eval "TG_ARN=\$TG_ARN_${svc}"
+  local var_name="${svc//-/_}"
+  eval "TG_ARN=\$TG_ARN_${var_name}"
 
   # Check if the service already exists
   EXISTING_SVC=$(aws ecs describe-services \
