@@ -14,7 +14,14 @@ import provisioningRouter from './routes/provisioning.routes.js';
 const config = getAdminConfig();
 const app = express();
 
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      'connect-src': ["'self'", 'https://cognito-idp.ap-southeast-2.amazonaws.com'],
+    },
+  },
+}));
 app.use(cors({ origin: config.CORS_ORIGINS, credentials: false, allowedHeaders: ['content-type', ADMIN_KEY_HEADER, 'authorization'] }));
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '64kb' }));
