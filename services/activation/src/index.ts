@@ -1,6 +1,7 @@
 import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import { errorMiddleware, serveFrontend } from '@vera/core';
 import { captureRawBody, requireSignedRequest } from '@vera/service-auth';
 import { purgeExpiredActivationSessions, startSweeper } from '@vera/retention';
@@ -13,6 +14,7 @@ import { createCardsMineRouter } from './routes/cards-mine.routes.js';
 const config = getActivationConfig();
 const app = express();
 
+app.use(helmet());
 app.use(cors({ origin: config.CORS_ORIGINS, credentials: false }));
 app.set('trust proxy', 1);
 

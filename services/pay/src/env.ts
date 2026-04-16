@@ -13,6 +13,9 @@ const { get: getPayConfig, reset: _resetPayConfig } = defineEnv({
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_PUBLISHABLE_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  // Admin API key — gates registration endpoints that should only be called
+  // from the admin surface, not by arbitrary cardholders.
+  ADMIN_API_KEY: hexKey(32),
   TRANSACTION_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   VERA_ROOT_ARQC_SEED: hexKey(32),
 });

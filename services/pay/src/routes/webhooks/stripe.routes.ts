@@ -17,9 +17,8 @@ router.post('/stripe', raw({ type: 'application/json', limit: '1mb' }), (req, re
   const sig = req.header('stripe-signature');
 
   if (!secret) {
-    // eslint-disable-next-line no-console
-    console.log('[stripe-webhook] received (unverified — no STRIPE_WEBHOOK_SECRET set)');
-    return res.status(202).json({ received: true, verified: false });
+    // Reject unverified payloads — never process webhooks without signature verification.
+    return res.status(501).json({ error: 'webhook_not_configured', message: 'STRIPE_WEBHOOK_SECRET is not set' });
   }
 
   if (!sig) {

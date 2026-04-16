@@ -1,6 +1,7 @@
 import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import { errorMiddleware, serveFrontend } from '@vera/core';
 import {
   expirePendingTransactions,
@@ -8,7 +9,8 @@ import {
   startSweeper,
 } from '@vera/retention';
 import { getPayConfig } from './env.js';
-import authRouter from './routes/auth.routes.js';
+import { requireAdminKey, ADMIN_KEY_HEADER } from './middleware/require-admin-key.js';
+import { authRegisterRouter, authAuthenticateRouter } from './routes/auth.routes.js';
 import transactionsRouter from './routes/transactions.routes.js';
 import paymentRouter from './routes/payment.routes.js';
 import webhooksRouter from './routes/webhooks/index.js';
@@ -16,7 +18,8 @@ import webhooksRouter from './routes/webhooks/index.js';
 const config = getPayConfig();
 const app = express();
 
-app.use(cors({ origin: config.CORS_ORIGINS, credentials: false }));
+app.use(helmet());
+app.use(cors({ origin: config.CORS_ORIGINS, credentials: false, allowedHeaders: ['content-type', ADMIN_KEY_HEADER] }));
 app.set('trust proxy', 1);
 
 // Webhooks must get raw body BEFORE express.json()
@@ -28,7 +31,11 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'pay', provider: config.PAYMENT_PROVIDER });
 });
 
-app.use('/api/auth', authRouter);
+// Registration endpoints are admin-only (credential provisioning).
+const adminGate = requireAdminKey(config.ADMIN_API_KEY);
+app.use('/api/auth/register', adminGate, authRegisterRouter);
+// Authentication endpoints are public (customer payment flow).
+app.use('/api/auth/authenticate', authAuthenticateRouter);
 app.use('/api/transactions', transactionsRouter);
 app.use('/api/payment', paymentRouter);
 

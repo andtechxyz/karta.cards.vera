@@ -55,8 +55,9 @@ export function errorMiddleware(
     });
     return;
   }
+  const msg = err instanceof Error ? err.message : String(err);
   // eslint-disable-next-line no-console
-  console.error('[unhandled]', err);
+  console.error('[unhandled]', msg);
   res.status(500).json({
     error: { code: 'internal_error', message: 'Internal server error' },
   });

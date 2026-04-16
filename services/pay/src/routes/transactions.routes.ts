@@ -8,12 +8,15 @@ import {
   getTransactionCardSummary,
   listTransactions,
   toTransactionDto,
+  toTransactionListDto,
 } from '../transactions/index.js';
 import { currencySchema } from '@vera/programs';
 import { publish } from '../realtime/index.js';
 import { getPayConfig } from '../env.js';
+import { requireAdminKey } from '../middleware/require-admin-key.js';
 
 const router: Router = Router();
+const adminGate = requireAdminKey(getPayConfig().ADMIN_API_KEY);
 
 const createSchema = z.object({
   cardId: z.string().min(1),
@@ -23,7 +26,8 @@ const createSchema = z.object({
   merchantName: z.string().min(1).max(128).optional(),
 });
 
-router.post('/', validateBody(createSchema), async (req, res) => {
+// Admin-only: create a transaction
+router.post('/', adminGate, validateBody(createSchema), async (req, res) => {
   const txn = await createTransaction(req.body);
   publish(txn.rlid, 'transaction_created', {
     amount: txn.amount,
@@ -36,6 +40,13 @@ router.post('/', validateBody(createSchema), async (req, res) => {
   res.status(201).json(toTransactionDto(txn));
 });
 
+// Admin-only: list all transactions (uses list DTO — no challengeNonce, no internal cardId)
+router.get('/', adminGate, async (_req, res) => {
+  const txns = await listTransactions();
+  res.json(txns.map(toTransactionListDto));
+});
+
+// Public: lookup by rlid (rlid is the implicit auth)
 router.get('/:rlid', async (req, res) => {
   res.json(toTransactionDto(await getTransactionByRlid(req.params.rlid)));
 });
@@ -53,10 +64,6 @@ router.post('/:rlid/qr', async (req, res) => {
   const url = `${payOrigin}/pay/${txn.rlid}`;
   const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 320 });
   res.json({ url, qr: dataUrl, expiresAt: txn.expiresAt });
-});
-
-router.get('/', async (_req, res) => {
-  res.json(await listTransactions());
 });
 
 export default router;

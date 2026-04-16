@@ -11,16 +11,16 @@ import {
 import { getTransactionForAuthOrThrow } from '../transactions/index.js';
 import { orchestratePostAuth } from '../orchestration/index.js';
 
-const router: Router = Router();
+// --- Registration (admin-gated in index.ts) --------------------------------
 
-// --- Registration (dev/admin path) -----------------------------------------
+export const authRegisterRouter: Router = Router();
 
 const beginRegSchema = z.object({
   cardId: z.string().min(1),
   kind: z.nativeEnum(CredentialKind),
 });
 
-router.post('/register/options', validateBody(beginRegSchema), async (req, res) => {
+authRegisterRouter.post('/options', validateBody(beginRegSchema), async (req, res) => {
   const options = await beginRegistration(req.body);
   res.json(options);
 });
@@ -31,7 +31,7 @@ const finishRegSchema = z.object({
   deviceName: z.string().max(128).optional(),
 });
 
-router.post('/register/verify', validateBody(finishRegSchema), async (req, res) => {
+authRegisterRouter.post('/verify', validateBody(finishRegSchema), async (req, res) => {
   const cred = await finishRegistration({
     cardId: req.body.cardId,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -46,14 +46,16 @@ router.post('/register/verify', validateBody(finishRegSchema), async (req, res) 
   });
 });
 
-// --- Authentication --------------------------------------------------------
+// --- Authentication (public — customer payment flow) -----------------------
+
+export const authAuthenticateRouter: Router = Router();
 
 const beginAuthSchema = z.object({
   rlid: z.string().min(1),
   kinds: z.array(z.nativeEnum(CredentialKind)).optional(),
 });
 
-router.post('/authenticate/options', validateBody(beginAuthSchema), async (req, res) => {
+authAuthenticateRouter.post('/options', validateBody(beginAuthSchema), async (req, res) => {
   const txn = await getTransactionForAuthOrThrow(req.body.rlid);
   const requested = req.body.kinds;
   const effective = requested
@@ -78,7 +80,7 @@ const finishAuthSchema = z.object({
   response: z.unknown(),
 });
 
-router.post('/authenticate/verify', validateBody(finishAuthSchema), async (req, res) => {
+authAuthenticateRouter.post('/verify', validateBody(finishAuthSchema), async (req, res) => {
   const txn = await getTransactionForAuthOrThrow(req.body.rlid);
   const auth = await finishAuthentication({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -95,5 +97,3 @@ router.post('/authenticate/verify', validateBody(finishAuthSchema), async (req, 
   });
   res.json(result);
 });
-
-export default router;

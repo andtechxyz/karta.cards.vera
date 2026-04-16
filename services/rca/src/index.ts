@@ -15,6 +15,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 import { requireSignedRequest, captureRawBody } from '@vera/service-auth';
 import { errorMiddleware } from '@vera/core';
+import { prisma } from '@vera/db';
 
 import { getRcaConfig } from './env.js';
 import { createProvisionRouter } from './routes/provision.routes.js';
@@ -51,7 +52,7 @@ const wss = new WebSocketServer({
   path: undefined, // We handle path routing ourselves
 });
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', async (ws, req) => {
   // Extract session ID from path: /api/provision/relay/:sessionId
   const match = req.url?.match(/\/api\/provision\/relay\/([a-zA-Z0-9_-]+)/);
   if (!match) {
@@ -60,6 +61,33 @@ wss.on('connection', (ws, req) => {
   }
 
   const sessionId = match[1];
+
+  // Validate the session exists, is in INIT phase, and was created recently.
+  // The sessionId itself is the auth token — it's a cuid with 25+ chars of
+  // entropy, returned only via the HMAC-gated /api/provision/start endpoint.
+  try {
+    const session = await prisma.provisioningSession.findUnique({
+      where: { id: sessionId },
+    });
+    if (!session) {
+      ws.close(4001, 'Unknown session');
+      return;
+    }
+    if (session.phase !== 'INIT') {
+      ws.close(4001, 'Session not in INIT phase');
+      return;
+    }
+    const ageMs = Date.now() - session.createdAt.getTime();
+    if (ageMs > config.WS_TIMEOUT_SECONDS * 1000) {
+      ws.close(4001, 'Session expired');
+      return;
+    }
+  } catch (err) {
+    console.error('[rca-ws] session validation error:', err);
+    ws.close(4001, 'Session validation failed');
+    return;
+  }
+
   handleRelayConnection(ws, sessionId);
 });
 

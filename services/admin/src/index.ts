@@ -1,6 +1,7 @@
 import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import { errorMiddleware, serveFrontend } from '@vera/core';
 import { getAdminConfig } from './env.js';
 import { ADMIN_KEY_HEADER, requireAdminKey } from './middleware/require-admin-key.js';
@@ -12,6 +13,7 @@ import provisioningRouter from './routes/provisioning.routes.js';
 const config = getAdminConfig();
 const app = express();
 
+app.use(helmet());
 app.use(cors({ origin: config.CORS_ORIGINS, credentials: false, allowedHeaders: ['content-type', ADMIN_KEY_HEADER] }));
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '64kb' }));
