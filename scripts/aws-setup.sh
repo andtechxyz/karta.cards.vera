@@ -251,7 +251,7 @@ aws ecs register-task-definition \
         { "containerPort": 3001, "protocol": "tcp" }
       ],
       "environment": [
-        { "name": "ACTIVATION_URL", "value": "http://${INTERNAL_ALB_DNS}:3002" }
+        { "name": "ACTIVATION_URL", "value": "https://activation.karta.cards" }
       ],
       "secrets": [
         { "name": "DATABASE_URL",                "valueFrom": "${ARN_DATABASE_URL}" },
@@ -307,10 +307,7 @@ aws ecs register-task-definition \
         { "name": "PROVISION_AUTH_KEYS",             "valueFrom": "${ARN_PROVISION_AUTH_KEYS}" },
         { "name": "TAP_HANDOFF_SECRET",             "valueFrom": "${ARN_TAP_HANDOFF_SECRET}" },
         { "name": "SERVICE_AUTH_ACTIVATION_SECRET",  "valueFrom": "${ARN_SERVICE_AUTH_ACTIVATION_SECRET}" },
-        { "name": "CORS_ORIGINS",                    "valueFrom": "${ARN_CORS_ORIGINS}" },
-        { "name": "WEBAUTHN_RP_ID",                  "valueFrom": "${ARN_WEBAUTHN_RP_ID}" },
-        { "name": "WEBAUTHN_ORIGINS",                "valueFrom": "${ARN_WEBAUTHN_ORIGINS}" },
-        { "name": "WEBAUTHN_RP_NAME",                "valueFrom": "${ARN_WEBAUTHN_RP_NAME}" }
+        { "name": "CORS_ORIGINS",                    "valueFrom": "${ARN_CORS_ORIGINS}" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
@@ -359,10 +356,7 @@ aws ecs register-task-definition \
         { "name": "STRIPE_SECRET_KEY",         "valueFrom": "${ARN_STRIPE_SECRET_KEY}" },
         { "name": "STRIPE_PUBLISHABLE_KEY",    "valueFrom": "${ARN_STRIPE_PUBLISHABLE_KEY}" },
         { "name": "TRANSACTION_TTL_SECONDS",   "valueFrom": "${ARN_TRANSACTION_TTL_SECONDS}" },
-        { "name": "VERA_ROOT_ARQC_SEED",      "valueFrom": "${ARN_VERA_ROOT_ARQC_SEED}" },
-        { "name": "WEBAUTHN_RP_ID",            "valueFrom": "${ARN_WEBAUTHN_RP_ID}" },
-        { "name": "WEBAUTHN_ORIGINS",          "valueFrom": "${ARN_WEBAUTHN_ORIGINS}" },
-        { "name": "WEBAUTHN_RP_NAME",          "valueFrom": "${ARN_WEBAUTHN_RP_NAME}" }
+        { "name": "VERA_ROOT_ARQC_SEED",      "valueFrom": "${ARN_VERA_ROOT_ARQC_SEED}" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
