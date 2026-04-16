@@ -13,7 +13,7 @@ import { CREDENTIAL_KINDS, type CredentialKind } from '../utils/webauthn';
 // SDM URL fires → /activate?session=<token>.  Admin sees the resulting
 // state but cannot mint sessions or links itself.
 
-type TabKey = 'cards' | 'vault' | 'programs' | 'transactions' | 'audit';
+type TabKey = 'cards' | 'vault' | 'programs' | 'transactions' | 'audit' | 'chipProfiles' | 'keyMgmt' | 'batches' | 'provMonitor';
 
 interface ActivationSessionRow {
   id: string;
@@ -44,7 +44,7 @@ export default function Admin() {
       <h1>Vera Admin</h1>
       <p className="small">Cards, vault, WebAuthn credentials, transactions, audit.</p>
       <div className="tabs">
-        {(['cards', 'vault', 'programs', 'transactions', 'audit'] as const).map((t) => (
+        {(['cards', 'vault', 'programs', 'transactions', 'audit', 'chipProfiles', 'keyMgmt', 'batches', 'provMonitor'] as const).map((t) => (
           <button
             key={t}
             className={`tab ${tab === t ? 'active' : ''}`}
@@ -59,6 +59,10 @@ export default function Admin() {
       {tab === 'programs' && <ProgramsTab />}
       {tab === 'transactions' && <TransactionsTab />}
       {tab === 'audit' && <AuditTab />}
+      {tab === 'chipProfiles' && <ChipProfilesTab />}
+      {tab === 'keyMgmt' && <KeyMgmtTab />}
+      {tab === 'batches' && <BatchesTab />}
+      {tab === 'provMonitor' && <ProvMonitorTab />}
     </div>
   );
 }
@@ -69,6 +73,10 @@ const labels: Record<TabKey, string> = {
   programs: 'Programs',
   transactions: 'Transactions',
   audit: 'Audit',
+  chipProfiles: 'Chip Profiles',
+  keyMgmt: 'Key Management',
+  batches: 'Batches',
+  provMonitor: 'Provisioning Monitor',
 };
 
 // --- Cards tab ---------------------------------------------------------------
@@ -900,6 +908,555 @@ function AuditTab() {
       )}
     </div>
   );
+}
+
+// --- Chip Profiles tab -------------------------------------------------------
+
+interface ChipProfile {
+  id: string;
+  name: string;
+  scheme: string;
+  vendor: string;
+  cvn: number;
+  dgiDefinitions: unknown;
+  elfAid: string | null;
+  moduleAid: string | null;
+  createdAt: string;
+}
+
+function ChipProfilesTab() {
+  const [profiles, setProfiles] = useState<ChipProfile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      setProfiles(await api.get<ChipProfile[]>('/admin/chip-profiles'));
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setErr(null);
+    setOk(null);
+    setBusy(true);
+    try {
+      const text = await file.text();
+      const body = JSON.parse(text);
+      await api.post('/admin/chip-profiles', body);
+      setOk(`Uploaded chip profile from ${file.name}`);
+      await load();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setBusy(false);
+      // Reset input so the same file can be uploaded again
+      e.target.value = '';
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    setErr(null);
+    setOk(null);
+    try {
+      await api.delete(`/admin/chip-profiles/${id}`);
+      setOk('Profile deleted');
+      await load();
+    } catch (e) {
+      setErr(errorMsg(e));
+    }
+  };
+
+  return (
+    <div className="panel">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Chip Profiles</h2>
+        <label className="btn primary" style={{ cursor: 'pointer' }}>
+          {busy ? 'Uploading...' : 'Upload Profile'}
+          <input
+            type="file"
+            accept=".json"
+            style={{ display: 'none' }}
+            onChange={handleUpload}
+            disabled={busy}
+          />
+        </label>
+      </div>
+      {ok && <p className="tag ok" style={{ marginTop: 12 }}>{ok}</p>}
+      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+      {loading ? (
+        <p className="small">Loading...</p>
+      ) : profiles.length === 0 ? (
+        <p className="small" style={{ marginTop: 12 }}>No chip profiles yet. Upload a JSON profile to get started.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Scheme</th>
+              <th>Vendor</th>
+              <th>CVN</th>
+              <th>DGI count</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {profiles.map((p) => (
+              <tr key={p.id}>
+                <td>{p.name}</td>
+                <td className="mono">{p.scheme}</td>
+                <td>{p.vendor}</td>
+                <td className="mono">{p.cvn}</td>
+                <td className="mono">
+                  {Array.isArray(p.dgiDefinitions) ? p.dgiDefinitions.length : '—'}
+                </td>
+                <td className="small">{formatDate(p.createdAt)}</td>
+                <td>
+                  <button className="btn ghost" onClick={() => handleDelete(p.id)}>
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// --- Key Management tab ------------------------------------------------------
+
+interface IssuerProfile {
+  id: string;
+  programId: string;
+  chipProfileId: string;
+  scheme: string;
+  cvn: number;
+  imkAlgorithm: string | null;
+  derivationMethod: string | null;
+  tmkKeyArn: string | null;
+  imkAcKeyArn: string | null;
+  imkSmiKeyArn: string | null;
+  imkSmcKeyArn: string | null;
+  imkIdnKeyArn: string | null;
+  issuerPkKeyArn: string | null;
+  aid: string | null;
+  appLabel: string | null;
+  createdAt: string;
+  program: { id: string; name: string } | null;
+  chipProfile: { id: string; name: string } | null;
+}
+
+function KeyMgmtTab() {
+  const [profiles, setProfiles] = useState<IssuerProfile[]>([]);
+  const [programs, setPrograms] = useState<Program[]>([]);
+  const [chipProfiles, setChipProfiles] = useState<ChipProfile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const [ip, pg, cp] = await Promise.all([
+        api.get<IssuerProfile[]>('/admin/issuer-profiles'),
+        api.get<Program[]>('/programs'),
+        api.get<ChipProfile[]>('/admin/chip-profiles'),
+      ]);
+      setProfiles(ip);
+      setPrograms(pg);
+      setChipProfiles(cp);
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const truncateArn = (arn: string | null) => {
+    if (!arn) return '—';
+    return '...' + arn.slice(-8);
+  };
+
+  if (showForm) {
+    return (
+      <IssuerProfileForm
+        programs={programs}
+        chipProfiles={chipProfiles}
+        onSaved={async () => {
+          setShowForm(false);
+          await load();
+        }}
+        onCancel={() => setShowForm(false)}
+      />
+    );
+  }
+
+  return (
+    <div className="panel">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Key Management</h2>
+        <button className="btn primary" onClick={() => setShowForm(true)}>
+          Create Issuer Profile
+        </button>
+      </div>
+      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+      {loading ? (
+        <p className="small">Loading...</p>
+      ) : profiles.length === 0 ? (
+        <p className="small" style={{ marginTop: 12 }}>No issuer profiles yet. Create one to link a program to a chip profile with key ARNs.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Program</th>
+              <th>Scheme</th>
+              <th>CVN</th>
+              <th>TMK</th>
+              <th>IMK-AC</th>
+              <th>IMK-SMI</th>
+              <th>IMK-SMC</th>
+              <th>IMK-IDN</th>
+              <th>Issuer PK</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {profiles.map((p) => (
+              <tr key={p.id}>
+                <td>{p.program?.name ?? p.programId}</td>
+                <td className="mono">{p.scheme}</td>
+                <td className="mono">{p.cvn}</td>
+                <td className="mono small">{truncateArn(p.tmkKeyArn)}</td>
+                <td className="mono small">{truncateArn(p.imkAcKeyArn)}</td>
+                <td className="mono small">{truncateArn(p.imkSmiKeyArn)}</td>
+                <td className="mono small">{truncateArn(p.imkSmcKeyArn)}</td>
+                <td className="mono small">{truncateArn(p.imkIdnKeyArn)}</td>
+                <td className="mono small">{truncateArn(p.issuerPkKeyArn)}</td>
+                <td className="small">{formatDate(p.createdAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function IssuerProfileForm({
+  programs,
+  chipProfiles,
+  onSaved,
+  onCancel,
+}: {
+  programs: Program[];
+  chipProfiles: ChipProfile[];
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [programId, setProgramId] = useState(programs[0]?.id ?? '');
+  const [chipProfileId, setChipProfileId] = useState(chipProfiles[0]?.id ?? '');
+  const [scheme, setScheme] = useState('mchip_advance');
+  const [cvn, setCvn] = useState('18');
+  const [imkAlgorithm, setImkAlgorithm] = useState('');
+  const [derivationMethod, setDerivationMethod] = useState('');
+  const [tmkKeyArn, setTmkKeyArn] = useState('');
+  const [imkAcKeyArn, setImkAcKeyArn] = useState('');
+  const [imkSmiKeyArn, setImkSmiKeyArn] = useState('');
+  const [imkSmcKeyArn, setImkSmcKeyArn] = useState('');
+  const [imkIdnKeyArn, setImkIdnKeyArn] = useState('');
+  const [issuerPkKeyArn, setIssuerPkKeyArn] = useState('');
+  const [aid, setAid] = useState('');
+  const [appLabel, setAppLabel] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      await api.post('/admin/issuer-profiles', {
+        programId,
+        chipProfileId,
+        scheme,
+        cvn: Number(cvn),
+        imkAlgorithm: imkAlgorithm || undefined,
+        derivationMethod: derivationMethod || undefined,
+        tmkKeyArn: tmkKeyArn || undefined,
+        imkAcKeyArn: imkAcKeyArn || undefined,
+        imkSmiKeyArn: imkSmiKeyArn || undefined,
+        imkSmcKeyArn: imkSmcKeyArn || undefined,
+        imkIdnKeyArn: imkIdnKeyArn || undefined,
+        issuerPkKeyArn: issuerPkKeyArn || undefined,
+        aid: aid || undefined,
+        appLabel: appLabel || undefined,
+      });
+      onSaved();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Create Issuer Profile</h2>
+        <button className="btn ghost" onClick={onCancel}>Cancel</button>
+      </div>
+
+      <label>Program</label>
+      <select value={programId} onChange={(e) => setProgramId(e.target.value)}>
+        {programs.length === 0 && <option value="">No programs available</option>}
+        {programs.map((p) => (
+          <option key={p.id} value={p.id}>{p.name} ({p.currency})</option>
+        ))}
+      </select>
+
+      <label>Chip Profile</label>
+      <select value={chipProfileId} onChange={(e) => setChipProfileId(e.target.value)}>
+        {chipProfiles.length === 0 && <option value="">No chip profiles available</option>}
+        {chipProfiles.map((cp) => (
+          <option key={cp.id} value={cp.id}>{cp.name} ({cp.scheme})</option>
+        ))}
+      </select>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div>
+          <label>Scheme</label>
+          <select value={scheme} onChange={(e) => setScheme(e.target.value)}>
+            <option value="mchip_advance">mchip_advance</option>
+            <option value="vsdc">vsdc</option>
+          </select>
+        </div>
+        <div>
+          <label>CVN</label>
+          <select value={cvn} onChange={(e) => setCvn(e.target.value)}>
+            <option value="10">10</option>
+            <option value="17">17</option>
+            <option value="18">18</option>
+            <option value="22">22</option>
+          </select>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div>
+          <label>IMK Algorithm</label>
+          <input value={imkAlgorithm} onChange={(e) => setImkAlgorithm(e.target.value)} className="mono" placeholder="TDES_CBC" />
+        </div>
+        <div>
+          <label>Derivation Method</label>
+          <input value={derivationMethod} onChange={(e) => setDerivationMethod(e.target.value)} className="mono" placeholder="OPTION_A" />
+        </div>
+      </div>
+
+      <h3 style={{ marginTop: 20 }}>Key ARNs</h3>
+      <p className="small">AWS Payment Cryptography key ARNs for each master key.</p>
+
+      <label>TMK Key ARN</label>
+      <input value={tmkKeyArn} onChange={(e) => setTmkKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
+
+      <label>IMK-AC Key ARN</label>
+      <input value={imkAcKeyArn} onChange={(e) => setImkAcKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
+
+      <label>IMK-SMI Key ARN</label>
+      <input value={imkSmiKeyArn} onChange={(e) => setImkSmiKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
+
+      <label>IMK-SMC Key ARN</label>
+      <input value={imkSmcKeyArn} onChange={(e) => setImkSmcKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
+
+      <label>IMK-IDN Key ARN</label>
+      <input value={imkIdnKeyArn} onChange={(e) => setImkIdnKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
+
+      <label>Issuer PK Key ARN</label>
+      <input value={issuerPkKeyArn} onChange={(e) => setIssuerPkKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
+
+      <h3 style={{ marginTop: 20 }}>EMV Constants</h3>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div>
+          <label>AID</label>
+          <input value={aid} onChange={(e) => setAid(e.target.value)} className="mono" placeholder="A0000000041010" />
+        </div>
+        <div>
+          <label>App Label</label>
+          <input value={appLabel} onChange={(e) => setAppLabel(e.target.value)} placeholder="Mastercard" />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <button
+          className="btn primary"
+          onClick={save}
+          disabled={busy || !programId || !chipProfileId}
+        >
+          {busy ? 'Creating...' : 'Create Issuer Profile'}
+        </button>
+      </div>
+      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+    </div>
+  );
+}
+
+// --- Batches tab (placeholder) -----------------------------------------------
+
+function BatchesTab() {
+  return (
+    <div className="panel">
+      <h2 style={{ margin: 0 }}>Batches</h2>
+      <p className="small" style={{ marginTop: 8 }}>
+        Manufacturing batch CSV upload — coming soon
+      </p>
+      <div style={{ marginTop: 16 }}>
+        <label>Batch CSV</label>
+        <input type="file" accept=".csv" disabled />
+        <p className="small" style={{ marginTop: 8 }}>Upload is disabled until the batch pipeline is implemented.</p>
+      </div>
+    </div>
+  );
+}
+
+// --- Provisioning Monitor tab ------------------------------------------------
+
+interface ProvStats {
+  activeSessions: number;
+  provisioned24h: number;
+  totalProvisioned: number;
+  failedSessions24h: number;
+}
+
+interface ProvSession {
+  id: string;
+  phase: string;
+  createdAt: string;
+  completedAt: string | null;
+  failedAt: string | null;
+  card: { id: string; cardRef: string; status: string } | null;
+  sadRecord: { id: string; proxyCardId: string; status: string } | null;
+}
+
+function ProvMonitorTab() {
+  const [stats, setStats] = useState<ProvStats | null>(null);
+  const [sessions, setSessions] = useState<ProvSession[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const [s, sess] = await Promise.all([
+        api.get<ProvStats>('/admin/provisioning/stats'),
+        api.get<ProvSession[]>('/admin/provisioning/sessions'),
+      ]);
+      setStats(s);
+      setSessions(sess);
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  return (
+    <div className="panel">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Provisioning Monitor</h2>
+        <button className="btn ghost" onClick={load} disabled={loading}>
+          Refresh
+        </button>
+      </div>
+      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+      {stats && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 16 }}>
+          <div style={{ padding: 16, border: '1px solid var(--edge)', borderRadius: 8, textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 700 }}>{stats.activeSessions}</div>
+            <div className="small">Active Sessions</div>
+          </div>
+          <div style={{ padding: 16, border: '1px solid var(--edge)', borderRadius: 8, textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 700 }}>{stats.provisioned24h}</div>
+            <div className="small">Provisioned (24h)</div>
+          </div>
+          <div style={{ padding: 16, border: '1px solid var(--edge)', borderRadius: 8, textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 700 }}>{stats.totalProvisioned}</div>
+            <div className="small">Total Provisioned</div>
+          </div>
+          <div style={{ padding: 16, border: '1px solid var(--edge)', borderRadius: 8, textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 700, color: stats.failedSessions24h > 0 ? 'var(--err)' : undefined }}>{stats.failedSessions24h}</div>
+            <div className="small">Failed (24h)</div>
+          </div>
+        </div>
+      )}
+      {sessions.length === 0 ? (
+        <p className="small" style={{ marginTop: 12 }}>No provisioning sessions yet.</p>
+      ) : (
+        <table style={{ marginTop: 16 }}>
+          <thead>
+            <tr>
+              <th>Session ID</th>
+              <th>Card</th>
+              <th>Phase</th>
+              <th>Proxy Card ID</th>
+              <th>SAD Status</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.map((s) => (
+              <tr key={s.id}>
+                <td className="mono small">{s.id.slice(0, 12)}...</td>
+                <td className="mono">{s.card?.cardRef ?? '—'}</td>
+                <td>
+                  <span className={`tag ${sessionPhaseTone(s.phase)}`}>{s.phase}</span>
+                </td>
+                <td className="mono small">{s.sadRecord?.proxyCardId ?? '—'}</td>
+                <td>
+                  {s.sadRecord ? (
+                    <span className={`tag ${s.sadRecord.status === 'COMPLETE' ? 'ok' : ''}`}>{s.sadRecord.status}</span>
+                  ) : (
+                    <span className="small">—</span>
+                  )}
+                </td>
+                <td className="small">{formatDate(s.createdAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function sessionPhaseTone(phase: string): 'ok' | 'err' | 'warn' | '' {
+  if (phase === 'COMPLETE') return 'ok';
+  if (phase === 'FAILED') return 'err';
+  if (phase === 'DATA_PREP' || phase === 'PERSO' || phase === 'PENDING') return 'warn';
+  return '';
 }
 
 // --- Helpers -----------------------------------------------------------------
