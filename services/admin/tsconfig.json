@@ -9,6 +9,7 @@
     { "path": "../../packages/core" },
     { "path": "../../packages/db" },
     { "path": "../../packages/programs" },
+    { "path": "../../packages/service-auth" },
     { "path": "../../packages/vault-client" }
   ],
   "include": ["src/**/*.ts"]

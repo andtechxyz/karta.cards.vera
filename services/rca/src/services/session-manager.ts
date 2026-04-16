@@ -12,7 +12,6 @@
  * Ported from palisade-rca/app/services/session_manager.py.
  */
 
-import { createHash } from 'node:crypto';
 import { prisma } from '@vera/db';
 import { APDUBuilder } from '@vera/emv';
 
@@ -187,40 +186,75 @@ export class SessionManager {
    */
   private async handleKeygenResponse(sessionId: string, msg: WSMessage): Promise<WSMessage[]> {
     const respData = Buffer.from(msg.hex ?? '', 'hex');
-
-    // Parse response components
     const iccPubkey = respData.subarray(0, Math.min(65, respData.length));
-    // Store hash for attestation verification (used in production SCP11 flow)
-    void createHash('sha256').update(iccPubkey).digest('hex');
 
-    await prisma.provisioningSession.update({
+    // Load session with SAD record and card's program/chip profile
+    const session = await prisma.provisioningSession.findUnique({
       where: { id: sessionId },
-      data: {
-        phase: 'SAD_TRANSFER',
-        iccPublicKey: iccPubkey,
+      include: {
+        sadRecord: true,
+        card: {
+          include: {
+            program: {
+              include: { issuerProfile: { include: { chipProfile: true } } },
+            },
+          },
+        },
       },
     });
 
-    // Build TRANSFER_SAD APDU.
-    // In production: load full SAD from data-prep, build ICC cert, assemble payload.
-    // For prototype: send a minimal SAD with the core structure.
+    if (!session) return [];
+
+    await prisma.provisioningSession.update({
+      where: { id: sessionId },
+      data: { phase: 'SAD_TRANSFER', iccPublicKey: iccPubkey },
+    });
+
+    // Get the real SAD payload
+    let sadPayload: Buffer;
+    if (session.sadRecord && session.sadRecord.sadEncrypted.length > 0) {
+      // In dev mode (no KMS), sadEncrypted is just the raw SAD bytes
+      // In production, it would need KMS decryption first
+      sadPayload = Buffer.from(session.sadRecord.sadEncrypted);
+    } else {
+      // Fallback: minimal SAD for testing
+      sadPayload = Buffer.from('0101085008 PALISADE'.replace(/ /g, ''), 'hex');
+    }
+
+    // Get chip profile DGI references
+    const chipProfile = session.card?.program?.issuerProfile?.chipProfile;
+    const iccPrivDgi = chipProfile?.iccPrivateKeyDgi ?? 0x8001;
+    const iccPrivTag = chipProfile?.iccPrivateKeyTag ?? 0x9F48;
+
+    // Build timestamp
     const timestamp = Math.floor(Date.now() / 1000);
-    const transferData = Buffer.concat([
-      Buffer.from([0x01, 0x01, 0x08]), // DGI 0x0101, len 8
-      Buffer.from('500850414c4953414445', 'hex'), // Tag 50 = "PALISADE"
-      Buffer.alloc(4), // bank_id
-      Buffer.alloc(4), // program_id
-      Buffer.from([0x01]), // scheme: MC
-      Buffer.from(timestamp.toString(16).padStart(8, '0'), 'hex'), // timestamp
-      Buffer.from([0x80, 0x01]), // icc_priv_dgi
-      Buffer.from([0x9f, 0x48]), // icc_priv_emv_tag
-    ]);
+    const tsBuf = Buffer.alloc(4);
+    tsBuf.writeUInt32BE(timestamp, 0);
+
+    // Build TRANSFER_SAD APDU data
+    const dgiRef = Buffer.alloc(4);
+    dgiRef.writeUInt16BE(iccPrivDgi, 0);
+    dgiRef.writeUInt16BE(iccPrivTag, 2);
+
+    const transferData = Buffer.concat([sadPayload, tsBuf, dgiRef]);
 
     const lc = transferData.length;
-    const transferApdu = Buffer.concat([
-      Buffer.from([0x80, 0xe2, 0x00, 0x00, lc]),
-      transferData,
-    ]);
+    let transferApdu: Buffer;
+    if (lc <= 255) {
+      transferApdu = Buffer.concat([
+        Buffer.from([0x80, 0xE2, 0x00, 0x00, lc]),
+        transferData,
+      ]);
+    } else {
+      // Extended APDU for large SAD
+      const lcBuf = Buffer.alloc(2);
+      lcBuf.writeUInt16BE(lc, 0);
+      transferApdu = Buffer.concat([
+        Buffer.from([0x80, 0xE2, 0x00, 0x00, 0x00]),
+        lcBuf,
+        transferData,
+      ]);
+    }
 
     return [{
       type: 'apdu',

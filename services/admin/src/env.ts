@@ -16,6 +16,8 @@ const { get: getAdminConfig, reset: _resetAdminConfig } = defineEnv({
   // Vault leg — admin backend signs outbound vault calls as keyId='admin'.
   VAULT_SERVICE_URL: z.string().url().default('http://localhost:3004'),
   SERVICE_AUTH_ADMIN_SECRET: hexKey(32),
+  // Activation leg — batch CSV ingestion calls activation's /api/cards/register.
+  ACTIVATION_SERVICE_URL: z.string().url().default('http://localhost:3002'),
 });
 
 export { getAdminConfig, _resetAdminConfig };

@@ -13,7 +13,8 @@
  * Ported from palisade-data-prep/app/services/data_prep.py.
  */
 
-import { createCipheriv, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { KMSClient, EncryptCommand, DecryptCommand } from '@aws-sdk/client-kms';
 import { prisma } from '@vera/db';
 import { SADBuilder, ChipProfile } from '@vera/emv';
 import type { CardData, IssuerProfileForSad } from '@vera/emv';
@@ -48,10 +49,12 @@ export interface PrepareResult {
 
 export class DataPrepService {
   private readonly emv: EmvDerivationService;
+  private readonly kms: KMSClient;
 
   constructor() {
     const config = getDataPrepConfig();
     this.emv = new EmvDerivationService(config.AWS_REGION);
+    this.kms = new KMSClient({ region: config.AWS_REGION });
   }
 
   async prepareCard(input: PrepareInput): Promise<PrepareResult> {
@@ -93,7 +96,7 @@ export class DataPrepService {
 
     // Step 5: Serialise and encrypt
     const sadBytes = SADBuilder.serialiseDgis(dgis);
-    const { encrypted, keyVersion } = this.encryptSad(sadBytes, config.KMS_SAD_KEY_ARN);
+    const { encrypted, keyVersion } = await this.encryptSad(sadBytes, config.KMS_SAD_KEY_ARN);
 
     // Step 6: Store SAD record
     const sadRecord = await prisma.sadRecord.create({
@@ -220,21 +223,67 @@ export class DataPrepService {
   }
 
   /**
-   * Encrypt SAD blob. In production uses KMS; in dev uses a local AES key.
+   * Encrypt SAD blob.
+   * - Production (KMS_SAD_KEY_ARN set): AWS KMS envelope encryption.
+   *   The returned CiphertextBlob is self-describing (contains key metadata).
+   *   sadKeyVersion = 0 — KMS manages its own key rotation.
+   * - Dev mode (KMS_SAD_KEY_ARN empty): plain base64 (no encryption).
+   *   sadKeyVersion = 1 to distinguish from KMS-encrypted blobs.
    */
-  private encryptSad(sadBytes: Buffer, _kmsKeyArn: string): { encrypted: Buffer; keyVersion: number } {
-    // For prototype: AES-256-GCM with a locally-generated key.
-    // Production: replace with KMS encrypt call.
-    const iv = randomBytes(12);
-    const key = randomBytes(32); // In production, this comes from KMS
-    const cipher = createCipheriv('aes-256-gcm', key, iv);
-    const encrypted = Buffer.concat([cipher.update(sadBytes), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    // Format: iv(12) || ciphertext || tag(16)
+  private async encryptSad(
+    sadBytes: Buffer,
+    kmsKeyArn: string,
+  ): Promise<{ encrypted: Buffer; keyVersion: number }> {
+    if (kmsKeyArn) {
+      // Production: KMS encrypt
+      const resp = await this.kms.send(
+        new EncryptCommand({ KeyId: kmsKeyArn, Plaintext: sadBytes }),
+      );
+      if (!resp.CiphertextBlob) {
+        throw new Error('KMS encrypt returned empty CiphertextBlob');
+      }
+      return {
+        encrypted: Buffer.from(resp.CiphertextBlob),
+        keyVersion: 0,
+      };
+    }
+
+    // Dev mode: base64 encode without encryption
     return {
-      encrypted: Buffer.concat([iv, encrypted, tag]),
+      encrypted: Buffer.from(sadBytes.toString('base64'), 'utf8'),
       keyVersion: 1,
     };
+  }
+
+  /**
+   * Decrypt a SAD blob previously encrypted by {@link encryptSad}.
+   *
+   * Can be called from other services (e.g. RCA) via the static overload.
+   *
+   * @param encrypted - The encrypted (or base64-encoded) SAD buffer.
+   * @param kmsKeyArn - KMS key ARN. Empty string = dev mode (base64 decode).
+   * @param sadKeyVersion - 0 = KMS encrypted, 1 = dev mode base64.
+   */
+  static async decryptSad(
+    encrypted: Buffer,
+    kmsKeyArn: string,
+    sadKeyVersion = 0,
+  ): Promise<Buffer> {
+    if (sadKeyVersion === 0 && kmsKeyArn) {
+      // Production: KMS decrypt — CiphertextBlob is self-describing
+      const config = getDataPrepConfig();
+      const kms = new KMSClient({ region: config.AWS_REGION });
+      const resp = await kms.send(
+        new DecryptCommand({ CiphertextBlob: encrypted }),
+      );
+      if (!resp.Plaintext) {
+        throw new Error('KMS decrypt returned empty Plaintext');
+      }
+      return Buffer.from(resp.Plaintext);
+    }
+
+    // Dev mode: base64 decode
+    return Buffer.from(encrypted.toString('utf8'), 'base64');
   }
 
   private computeEffectiveDate(expiryYymm: string): string {
