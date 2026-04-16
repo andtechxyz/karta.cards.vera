@@ -141,15 +141,33 @@ export default function Admin() {
     setLoginError('');
     setLoginLoading(true);
     try {
-      await cognitoAuth('VerifySoftwareToken', {
+      const verifyResp = await cognitoAuth('VerifySoftwareToken', {
         Session: loginSession,
         UserCode: mfaCode,
         FriendlyDeviceName: 'Admin MFA',
       });
-      // After setup, need to re-authenticate to get tokens
+
+      // VerifySoftwareToken returns a Session we can use to complete auth
+      // via RespondToAuthChallenge with MFA_SETUP challenge
+      if (verifyResp.Session) {
+        const authResult = await cognitoAuth('RespondToAuthChallenge', {
+          ClientId: COGNITO_CLIENT_ID,
+          ChallengeName: 'MFA_SETUP',
+          Session: verifyResp.Session,
+          ChallengeResponses: { USERNAME: email },
+        });
+        if (authResult.AuthenticationResult) {
+          const token = authResult.AuthenticationResult.AccessToken;
+          api.setAuthToken(token);
+          setAuthToken(token);
+          return;
+        }
+      }
+
+      // Fallback: re-authenticate with the new password + MFA
+      setMfaCode('');
       setLoginPhase('credentials');
-      setLoginError('MFA configured. Please sign in again.');
-      setPassword('');
+      setLoginError('MFA configured! Sign in with your new password — you\'ll be asked for the code.');
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : 'MFA setup failed');
     } finally {
