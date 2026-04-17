@@ -1143,11 +1143,16 @@ interface ChipProfile {
   dgiDefinitions: unknown;
   elfAid: string | null;
   moduleAid: string | null;
+  programId: string | null;
+  program: { id: string; name: string } | null;
   createdAt: string;
 }
 
 function ChipProfilesTab() {
   const [profiles, setProfiles] = useState<ChipProfile[]>([]);
+  const [programs, setPrograms] = useState<Program[]>([]);
+  const [filterProgramId, setFilterProgramId] = useState<string>('');
+  const [uploadProgramId, setUploadProgramId] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -1156,13 +1161,19 @@ function ChipProfilesTab() {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      setProfiles(await api.get<ChipProfile[]>('/admin/chip-profiles'));
+      const qs = filterProgramId ? `?programId=${encodeURIComponent(filterProgramId)}` : '';
+      const [cp, pg] = await Promise.all([
+        api.get<ChipProfile[]>(`/admin/chip-profiles${qs}`),
+        api.get<Program[]>('/programs'),
+      ]);
+      setProfiles(cp);
+      setPrograms(pg);
     } catch (e) {
       setErr(errorMsg(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filterProgramId]);
 
   useEffect(() => {
     load();
@@ -1177,8 +1188,12 @@ function ChipProfilesTab() {
     try {
       const text = await file.text();
       const body = JSON.parse(text);
+      if (uploadProgramId) body.programId = uploadProgramId;
       await api.post('/admin/chip-profiles', body);
-      setOk(`Uploaded chip profile from ${file.name}`);
+      setOk(
+        `Uploaded chip profile from ${file.name}` +
+          (uploadProgramId ? ` (scoped to program)` : ` (global)`),
+      );
       await load();
     } catch (e) {
       setErr(errorMsg(e));
@@ -1205,15 +1220,44 @@ function ChipProfilesTab() {
     <div className="panel">
       <div className="row">
         <h2 style={{ margin: 0 }}>Chip Profiles</h2>
-        <label className="btn primary" style={{ cursor: 'pointer' }}>
-          {busy ? 'Uploading...' : 'Upload Profile'}
-          <input
-            type="file"
-            accept=".json"
-            style={{ display: 'none' }}
-            onChange={handleUpload}
-            disabled={busy}
-          />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            Upload scope:
+            <select
+              value={uploadProgramId}
+              onChange={(e) => setUploadProgramId(e.target.value)}
+              disabled={busy}
+            >
+              <option value="">Global (all programs)</option>
+              {programs.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="btn primary" style={{ cursor: 'pointer' }}>
+            {busy ? 'Uploading...' : 'Upload Profile'}
+            <input
+              type="file"
+              accept=".json"
+              style={{ display: 'none' }}
+              onChange={handleUpload}
+              disabled={busy}
+            />
+          </label>
+        </div>
+      </div>
+      <div className="row" style={{ marginTop: 12 }}>
+        <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          Filter by program:
+          <select
+            value={filterProgramId}
+            onChange={(e) => setFilterProgramId(e.target.value)}
+          >
+            <option value="">All profiles (admin view)</option>
+            {programs.map((p) => (
+              <option key={p.id} value={p.id}>{p.name} (scoped + global)</option>
+            ))}
+          </select>
         </label>
       </div>
       {ok && <p className="tag ok" style={{ marginTop: 12 }}>{ok}</p>}
@@ -1227,6 +1271,7 @@ function ChipProfilesTab() {
           <thead>
             <tr>
               <th>Name</th>
+              <th>Program</th>
               <th>Scheme</th>
               <th>Vendor</th>
               <th>CVN</th>
@@ -1239,6 +1284,7 @@ function ChipProfilesTab() {
             {profiles.map((p) => (
               <tr key={p.id}>
                 <td>{p.name}</td>
+                <td>{p.program ? p.program.name : <span className="small">Global</span>}</td>
                 <td className="mono">{p.scheme}</td>
                 <td>{p.vendor}</td>
                 <td className="mono">{p.cvn}</td>

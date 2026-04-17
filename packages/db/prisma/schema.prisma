@@ -60,9 +60,9 @@ datasource db {
 // program) falls back to DEFAULT_TIER_RULES.
 
 model Program {
-  id        String   @id // Palisade programId, e.g. "prog_mc_plat_01"
+  id        String @id // Palisade programId, e.g. "prog_mc_plat_01"
   name      String
-  currency  String   @db.VarChar(3) // ISO 4217 — all rules and card txns in this currency
+  currency  String @db.VarChar(3) // ISO 4217 — all rules and card txns in this currency
   tierRules Json // TierRule[] — shape validated by Zod on write
 
   // --- NDEF URL templates --------------------------------------------------
@@ -86,11 +86,23 @@ model Program {
   preActivationNdefUrlTemplate  String?
   postActivationNdefUrlTemplate String?
 
+  // --- Microsite ---------------------------------------------------------
+  // Per-program static website served from S3+CloudFront.  When enabled,
+  // successful card activation redirects the cardholder to
+  // microsite.karta.cards/programs/<programId>/ which serves the currently
+  // active MicrositeVersion.  See MicrositeVersion for the versioning model.
+  micrositeEnabled       Boolean @default(false)
+  micrositeActiveVersion String? // current active MicrositeVersion.id
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  cards          Card[]
-  issuerProfile  IssuerProfile?
+  cards             Card[]
+  issuerProfile     IssuerProfile?
+  micrositeVersions MicrositeVersion[]
+
+  // Program-scoped chip profiles (nullable FK on ChipProfile.programId)
+  scopedChipProfiles ChipProfile[] @relation("ProgramChipProfiles")
 }
 
 // ---------------------------------------------------------------------------
@@ -459,58 +471,65 @@ model Transaction {
 // (ZIP), or Visa VPA (XML/ZIP) format.  The profile_parser normalises all
 // formats to ChipProfile rows.
 model ChipProfile {
-  id           String @id @default(cuid())
-  name         String
+  id               String  @id @default(cuid())
+  name             String
   // "mchip_advance" | "vsdc"
-  scheme       String
+  scheme           String
   // "nxp" | "infineon"
-  vendor       String
+  vendor           String
   // Cryptogram Version Number: 10, 17, 18, 22
-  cvn          Int
+  cvn              Int
   // Full DGI definition array (JSON) — see packages/emv/src/chip-profile.ts
-  dgiDefinitions Json
+  dgiDefinitions   Json
   // AIDs for the applet stack
-  elfAid       String?
-  moduleAid    String?
-  paAid        String  @default("D276000085504100")
-  fidoAid      String  @default("A0000006472F0001")
+  elfAid           String?
+  moduleAid        String?
+  paAid            String  @default("D276000085504100")
+  fidoAid          String  @default("A0000006472F0001")
   // Special DGI references the PA needs
-  iccPrivateKeyDgi Int @default(32769) // 0x8001
-  iccPrivateKeyTag Int @default(40776) // 0x9F48
-  mkAcDgi          Int @default(2048)  // 0x0800
-  mkSmiDgi         Int @default(2049)  // 0x0801
-  mkSmcDgi         Int @default(2050)  // 0x0802
+  iccPrivateKeyDgi Int     @default(32769) // 0x8001
+  iccPrivateKeyTag Int     @default(40776) // 0x9F48
+  mkAcDgi          Int     @default(2048) // 0x0800
+  mkSmiDgi         Int     @default(2049) // 0x0801
+  mkSmcDgi         Int     @default(2050) // 0x0802
+
+  // Optional scoping — when set, this profile is only visible to this program.
+  // Null means the profile is global/catalog (shared across all programs).
+  programId String?
+  program   Program? @relation("ProgramChipProfiles", fields: [programId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   issuerProfiles IssuerProfile[]
+
+  @@index([programId])
 }
 
 // An IssuerProfile links a Program to its AWS Payment Cryptography key ARNs
 // and EMV application configuration.  One per program — the issuer's key
 // hierarchy, CA enrollment certificates, and per-scheme constants.
 model IssuerProfile {
-  id        String @id @default(cuid())
-  programId String @unique
+  id        String  @id @default(cuid())
+  programId String  @unique
   program   Program @relation(fields: [programId], references: [id])
 
   chipProfileId String
   chipProfile   ChipProfile @relation(fields: [chipProfileId], references: [id])
 
   // Payment scheme & CVN
-  scheme    String // "mchip_advance" | "vsdc"
-  cvn       Int    // 10, 17, 18, 22
+  scheme           String // "mchip_advance" | "vsdc"
+  cvn              Int // 10, 17, 18, 22
   imkAlgorithm     String @default("TDES_2KEY")
   derivationMethod String @default("METHOD_A")
 
   // AWS Payment Cryptography key ARNs
-  tmkKeyArn       String @default("") // Token Master Key (iCVV)
-  imkAcKeyArn     String @default("") // Issuer Master Key - AC (ARQC)
-  imkSmiKeyArn    String @default("") // Issuer Master Key - SMI (MAC)
-  imkSmcKeyArn    String @default("") // Issuer Master Key - SMC (encryption)
-  imkIdnKeyArn    String @default("") // Optional: ICC Dynamic Number
-  issuerPkKeyArn  String @default("") // Signs ICC PK Certificates (RSA)
+  tmkKeyArn      String @default("") // Token Master Key (iCVV)
+  imkAcKeyArn    String @default("") // Issuer Master Key - AC (ARQC)
+  imkSmiKeyArn   String @default("") // Issuer Master Key - SMI (MAC)
+  imkSmcKeyArn   String @default("") // Issuer Master Key - SMC (encryption)
+  imkIdnKeyArn   String @default("") // Optional: ICC Dynamic Number
+  issuerPkKeyArn String @default("") // Signs ICC PK Certificates (RSA)
 
   // Pre-computed certificates from CA enrollment
   caPkIndex           String @default("")
@@ -519,25 +538,25 @@ model IssuerProfile {
   issuerPkExponent    String @default("") // Hex, Tag 9F32
 
   // EMV application parameters (constants per profile)
-  aid                 String @default("") // Tag 9F06 hex
-  appLabel            String @default("") // Tag 50
-  appPreferredName    String @default("") // Tag 9F12
-  appPriority         String @default("") // Tag 87 hex
-  appVersionNumber    String @default("") // Tag 9F08 hex
-  aip                 String @default("") // Tag 82 hex
-  afl                 String @default("") // Tag 94 hex
-  cvmList             String @default("") // Tag 8E hex
-  pdol                String @default("") // Tag 9F38 hex
-  cdol1               String @default("") // Tag 8C hex
-  cdol2               String @default("") // Tag 8D hex
-  iacDefault          String @default("") // Tag 9F0D hex
-  iacDenial           String @default("") // Tag 9F0E hex
-  iacOnline           String @default("") // Tag 9F0F hex
-  appUsageControl     String @default("") // Tag 9F07 hex
-  currencyCode        String @default("") // Tag 9F42 hex
-  currencyExponent    String @default("") // Tag 9F44 hex
-  countryCode         String @default("") // Tag 5F28 hex
-  sdaTagList          String @default("") // Tag 9F4A hex
+  aid              String @default("") // Tag 9F06 hex
+  appLabel         String @default("") // Tag 50
+  appPreferredName String @default("") // Tag 9F12
+  appPriority      String @default("") // Tag 87 hex
+  appVersionNumber String @default("") // Tag 9F08 hex
+  aip              String @default("") // Tag 82 hex
+  afl              String @default("") // Tag 94 hex
+  cvmList          String @default("") // Tag 8E hex
+  pdol             String @default("") // Tag 9F38 hex
+  cdol1            String @default("") // Tag 8C hex
+  cdol2            String @default("") // Tag 8D hex
+  iacDefault       String @default("") // Tag 9F0D hex
+  iacDenial        String @default("") // Tag 9F0E hex
+  iacOnline        String @default("") // Tag 9F0F hex
+  appUsageControl  String @default("") // Tag 9F07 hex
+  currencyCode     String @default("") // Tag 9F42 hex
+  currencyExponent String @default("") // Tag 9F44 hex
+  countryCode      String @default("") // Tag 5F28 hex
+  sdaTagList       String @default("") // Tag 9F4A hex
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -569,19 +588,19 @@ model SadRecord {
 // Tracks the 6-phase state machine as the RCA relays APDUs between
 // the mobile app and the card's Provisioning Agent.
 model ProvisioningSession {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   cardId      String
-  card        Card     @relation(fields: [cardId], references: [id])
-  sadRecordId String   @default("")
+  card        Card      @relation(fields: [cardId], references: [id])
+  sadRecordId String    @default("")
   sadRecord   SadRecord @relation(fields: [sadRecordId], references: [id])
 
   // Stable proxy card identifier — used by the RCA / data-prep services
-  proxyCardId  String   @default("")
+  proxyCardId  String  @default("")
   // Session ID returned by the RCA when starting a mobile provisioning flow
-  rcaSessionId String?  @unique
+  rcaSessionId String? @unique
 
   // INIT → PA_FCI → SCP11 → KEYGEN → SAD_TRANSFER → AWAITING_FINAL → CONFIRMING → COMPLETE | FAILED
-  phase       String   @default("INIT")
+  phase String @default("INIT")
 
   // ICC public key received during KEYGEN phase (uncompressed, 65 bytes)
   iccPublicKey Bytes?

@@ -134,10 +134,10 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('GET /api/admin/chip-profiles', () => {
-  it('returns array of chip profiles', async () => {
+  it('returns array of chip profiles (admin view, no filter)', async () => {
     const profiles = [
-      { id: 'cp_1', name: 'JCOP4', scheme: 'visa', vendor: 'NXP', cvn: 18 },
-      { id: 'cp_2', name: 'ST31', scheme: 'mastercard', vendor: 'ST', cvn: 10 },
+      { id: 'cp_1', name: 'JCOP4', scheme: 'visa', vendor: 'NXP', cvn: 18, programId: null, program: null },
+      { id: 'cp_2', name: 'ST31', scheme: 'mastercard', vendor: 'ST', cvn: 10, programId: 'prog_1', program: { id: 'prog_1', name: 'Bank A' } },
     ];
     vi.mocked(chipFindMany()).mockResolvedValue(profiles as never);
 
@@ -147,6 +147,26 @@ describe('GET /api/admin/chip-profiles', () => {
     expect(status).toBe(200);
     expect(body).toHaveLength(2);
     expect(body[0].name).toBe('JCOP4');
+    expect(chipFindMany()).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: undefined,
+        include: { program: { select: { id: true, name: true } } },
+      }),
+    );
+  });
+
+  it('filters by programId — scoped + global union', async () => {
+    vi.mocked(chipFindMany()).mockResolvedValue([] as never);
+
+    const app = buildApp();
+    await inject(app, 'GET', '/api/admin/chip-profiles?programId=prog_1');
+
+    expect(chipFindMany()).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { OR: [{ programId: 'prog_1' }, { programId: null }] },
+        include: { program: { select: { id: true, name: true } } },
+      }),
+    );
   });
 });
 

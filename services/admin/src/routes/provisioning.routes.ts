@@ -25,10 +25,18 @@ const createChipProfileSchema = z.object({
   moduleAid: z.string().optional(),
   paAid: z.string().optional(),
   fidoAid: z.string().optional(),
+  programId: z.string().optional(), // null = global, string = program-scoped
 });
 
-router.get('/chip-profiles', async (_req, res) => {
-  const profiles = await prisma.chipProfile.findMany({ orderBy: { createdAt: 'desc' } });
+router.get('/chip-profiles', async (req, res) => {
+  const programId = typeof req.query.programId === 'string' ? req.query.programId : undefined;
+  const profiles = await prisma.chipProfile.findMany({
+    where: programId
+      ? { OR: [{ programId }, { programId: null }] } // program-scoped + global
+      : undefined, // admin sees everything when no filter
+    orderBy: { createdAt: 'desc' },
+    include: { program: { select: { id: true, name: true } } },
+  });
   res.json(profiles);
 });
 
