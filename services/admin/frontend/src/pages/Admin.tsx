@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
-import { api, errorMsg, getAuthToken, clearAuthToken } from '../utils/api';
+import { api, errorMsg, getAuthToken, clearAuthToken, setRefreshToken } from '../utils/api';
 import { formatDate, formatMoney } from '../utils/format';
 import { luhnValid } from '../utils/luhn';
 import { CREDENTIAL_KINDS, type CredentialKind } from '../utils/webauthn';
@@ -95,7 +95,8 @@ export default function Admin() {
         setLoginSession(result.Session);
         setLoginPhase('mfa_verify');
       } else if (result.AuthenticationResult) {
-        const token = result.AuthenticationResult.AccessToken;
+        const token = result.AuthenticationResult.IdToken;
+        if (result.AuthenticationResult.RefreshToken) setRefreshToken(result.AuthenticationResult.RefreshToken);
         api.setAuthToken(token);
         setAuthToken(token);
       }
@@ -126,7 +127,8 @@ export default function Admin() {
         setLoginSession(result.Session);
         setLoginPhase('mfa_verify');
       } else if (result.AuthenticationResult) {
-        const token = result.AuthenticationResult.AccessToken;
+        const token = result.AuthenticationResult.IdToken;
+        if (result.AuthenticationResult.RefreshToken) setRefreshToken(result.AuthenticationResult.RefreshToken);
         api.setAuthToken(token);
         setAuthToken(token);
       }
@@ -157,7 +159,8 @@ export default function Admin() {
           ChallengeResponses: { USERNAME: email },
         });
         if (authResult.AuthenticationResult) {
-          const token = authResult.AuthenticationResult.AccessToken;
+          const token = authResult.AuthenticationResult.IdToken;
+          if (authResult.AuthenticationResult.RefreshToken) setRefreshToken(authResult.AuthenticationResult.RefreshToken);
           api.setAuthToken(token);
           setAuthToken(token);
           return;
@@ -187,7 +190,8 @@ export default function Admin() {
       });
 
       if (result.AuthenticationResult) {
-        const token = result.AuthenticationResult.AccessToken;
+        const token = result.AuthenticationResult.IdToken;
+        if (result.AuthenticationResult.RefreshToken) setRefreshToken(result.AuthenticationResult.RefreshToken);
         api.setAuthToken(token);
         setAuthToken(token);
       }

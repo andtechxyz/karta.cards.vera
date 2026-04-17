@@ -10,6 +10,8 @@ export interface CognitoUser {
   sub: string;
   /** Email claim — present if the user pool includes it. */
   email?: string;
+  /** Cognito groups the user belongs to (from `cognito:groups` claim). */
+  groups: string[];
 }
 
 export interface CognitoAuthConfig {
@@ -19,6 +21,11 @@ export interface CognitoAuthConfig {
   clientId: string;
   /** AWS region — defaults to the region prefix of userPoolId. */
   region?: string;
+  /**
+   * If set, the user must be a member of this Cognito group.  Rejects with
+   * 403 if the group claim is missing or does not include this value.
+   */
+  requiredGroup?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +76,18 @@ export function createCognitoAuthMiddleware(config: CognitoAuthConfig): RequestH
         audience: config.clientId,
       });
 
-      req.cognitoUser = extractUser(payload);
+      const user = extractUser(payload);
+
+      // Enforce group membership if configured
+      if (config.requiredGroup && !user.groups.includes(config.requiredGroup)) {
+        res.status(403).json({
+          error: 'forbidden',
+          message: `Requires membership in '${config.requiredGroup}' group`,
+        });
+        return;
+      }
+
+      req.cognitoUser = user;
       next();
     } catch (err) {
       const message =
@@ -84,8 +102,14 @@ export function createCognitoAuthMiddleware(config: CognitoAuthConfig): RequestH
 // ---------------------------------------------------------------------------
 
 function extractUser(payload: JWTPayload): CognitoUser {
+  const rawGroups = payload['cognito:groups'];
+  const groups = Array.isArray(rawGroups)
+    ? rawGroups.filter((g): g is string => typeof g === 'string')
+    : [];
+
   return {
     sub: payload.sub ?? '',
     email: typeof payload.email === 'string' ? payload.email : undefined,
+    groups,
   };
 }

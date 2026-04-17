@@ -92,9 +92,6 @@ vi.mock('@vera/core', async (importOriginal) => {
 // Constants
 // ---------------------------------------------------------------------------
 
-const TEST_ADMIN_KEY = '9'.repeat(64); // matches ADMIN_API_KEY from tests/setup.ts
-const ADMIN_KEY_HEADER = 'x-admin-key';
-
 // ---------------------------------------------------------------------------
 // Build app
 // ---------------------------------------------------------------------------
@@ -102,7 +99,6 @@ const ADMIN_KEY_HEADER = 'x-admin-key';
 import helmet from 'helmet';
 import cors from 'cors';
 import { errorMiddleware } from '@vera/core';
-import { requireAdminKey } from '../../services/admin/src/middleware/require-admin-key.js';
 import programsRouter from '../../services/admin/src/routes/programs.routes.js';
 import cardsRouter from '../../services/admin/src/routes/cards.routes.js';
 import vaultProxyRouter from '../../services/admin/src/routes/vault-proxy.routes.js';
@@ -111,7 +107,7 @@ import provisioningRouter from '../../services/admin/src/routes/provisioning.rou
 function buildApp(): Express {
   const app = express();
   app.use(helmet());
-  app.use(cors({ origin: '*', credentials: false, allowedHeaders: ['content-type', ADMIN_KEY_HEADER, 'authorization'] }));
+  app.use(cors({ origin: '*', credentials: false, allowedHeaders: ['content-type', 'authorization'] }));
   app.set('trust proxy', 1);
   app.use(express.json({ limit: '64kb' }));
 
@@ -119,17 +115,16 @@ function buildApp(): Express {
     res.json({ ok: true, service: 'admin' });
   });
 
-  // Cognito middleware is mocked to always pass
+  // Cognito middleware is mocked to always pass with admin group
   const cognitoAuth = (_req: any, _res: any, next: any) => {
-    _req.cognitoUser = { sub: 'test-admin-sub', email: 'admin@test.com' };
+    _req.cognitoUser = { sub: 'test-admin-sub', email: 'admin@test.com', groups: ['admin'] };
     next();
   };
-  const adminGate = requireAdminKey(TEST_ADMIN_KEY);
 
-  app.use('/api/programs', cognitoAuth, adminGate, programsRouter);
-  app.use('/api/cards', cognitoAuth, adminGate, cardsRouter);
-  app.use('/api/admin/vault', cognitoAuth, adminGate, vaultProxyRouter);
-  app.use('/api/admin', cognitoAuth, adminGate, provisioningRouter);
+  app.use('/api/programs', cognitoAuth, programsRouter);
+  app.use('/api/cards', cognitoAuth, cardsRouter);
+  app.use('/api/admin/vault', cognitoAuth, vaultProxyRouter);
+  app.use('/api/admin', cognitoAuth, provisioningRouter);
 
   app.use(errorMiddleware);
   return app;
@@ -156,21 +151,15 @@ describe('Admin service — integration', () => {
     });
   });
 
-  // ---- Programs: auth gate ----
+  // ---- Programs ----
   describe('GET /api/programs', () => {
-    it('rejects without X-Admin-Key', async () => {
-      const res = await request(app).get('/api/programs');
-      expect(res.status).toBe(401);
-    });
-
-    it('returns 200 with admin key', async () => {
+    it('returns 200 for authenticated admin user', async () => {
       mockPrisma.program.findMany.mockResolvedValue([
         { id: 'test', name: 'Test Program', currency: 'AUD', tierRules: [] },
       ]);
 
       const res = await request(app)
-        .get('/api/programs')
-        .set(ADMIN_KEY_HEADER, TEST_ADMIN_KEY);
+        .get('/api/programs');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
     });
@@ -199,7 +188,6 @@ describe('Admin service — integration', () => {
 
       const res = await request(app)
         .post('/api/programs')
-        .set(ADMIN_KEY_HEADER, TEST_ADMIN_KEY)
         .send(programData);
       expect(res.status).toBe(201);
       expect(res.body).toHaveProperty('id', 'new-program');
@@ -214,8 +202,7 @@ describe('Admin service — integration', () => {
       ]);
 
       const res = await request(app)
-        .get('/api/admin/chip-profiles')
-        .set(ADMIN_KEY_HEADER, TEST_ADMIN_KEY);
+        .get('/api/admin/chip-profiles');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
     });
@@ -240,7 +227,6 @@ describe('Admin service — integration', () => {
 
       const res = await request(app)
         .post('/api/admin/chip-profiles')
-        .set(ADMIN_KEY_HEADER, TEST_ADMIN_KEY)
         .send(profileData);
       expect(res.status).toBe(201);
       expect(res.body).toHaveProperty('id');
@@ -257,8 +243,7 @@ describe('Admin service — integration', () => {
         .mockResolvedValueOnce(2);  // failedSessions24h
 
       const res = await request(app)
-        .get('/api/admin/provisioning/stats')
-        .set(ADMIN_KEY_HEADER, TEST_ADMIN_KEY);
+        .get('/api/admin/provisioning/stats');
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('activeSessions', 3);
       expect(res.body).toHaveProperty('provisioned24h', 10);

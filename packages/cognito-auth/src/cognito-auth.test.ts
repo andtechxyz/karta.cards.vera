@@ -97,6 +97,7 @@ describe('createCognitoAuthMiddleware', () => {
     expect(req.cognitoUser).toEqual({
       sub: 'user-uuid-123',
       email: 'test@example.com',
+      groups: [],
     });
     expect(res.status).not.toHaveBeenCalled();
   });
@@ -118,6 +119,7 @@ describe('createCognitoAuthMiddleware', () => {
     expect(req.cognitoUser).toEqual({
       sub: '',
       email: 'test@example.com',
+      groups: [],
     });
   });
 
@@ -138,7 +140,74 @@ describe('createCognitoAuthMiddleware', () => {
     expect(req.cognitoUser).toEqual({
       sub: 'user-uuid-456',
       email: undefined,
+      groups: [],
     });
+  });
+
+  it('extracts cognito:groups claim when present', async () => {
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: 'user-uuid', 'cognito:groups': ['admin', 'developers'] },
+      protectedHeader: { alg: 'RS256' },
+      key: {} as any,
+    } as any);
+
+    const req = mockReq({ authorization: 'Bearer valid.jwt.token' });
+    const res = mockRes();
+    const next = mockNext();
+
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.cognitoUser?.groups).toEqual(['admin', 'developers']);
+  });
+
+  it('403 forbidden when requiredGroup not in user groups', async () => {
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: 'user-uuid', 'cognito:groups': ['developers'] },
+      protectedHeader: { alg: 'RS256' },
+      key: {} as any,
+    } as any);
+
+    const gatedMiddleware = createCognitoAuthMiddleware({
+      userPoolId: 'ap-southeast-2_TestPool',
+      clientId: 'test-client-id',
+      requiredGroup: 'admin',
+    });
+
+    const req = mockReq({ authorization: 'Bearer valid.jwt.token' });
+    const res = mockRes();
+    const next = mockNext();
+
+    await gatedMiddleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'forbidden' }),
+    );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('allows when user is in requiredGroup', async () => {
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: 'user-uuid', 'cognito:groups': ['admin'] },
+      protectedHeader: { alg: 'RS256' },
+      key: {} as any,
+    } as any);
+
+    const gatedMiddleware = createCognitoAuthMiddleware({
+      userPoolId: 'ap-southeast-2_TestPool',
+      clientId: 'test-client-id',
+      requiredGroup: 'admin',
+    });
+
+    const req = mockReq({ authorization: 'Bearer valid.jwt.token' });
+    const res = mockRes();
+    const next = mockNext();
+
+    await gatedMiddleware(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
   });
 
   it('401 invalid_token when JWT is expired', async () => {

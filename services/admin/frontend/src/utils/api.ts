@@ -1,43 +1,37 @@
 // Minimal fetch wrapper.  Everything lives under /api and is served from the
-// same origin (Vite proxies to the admin backend in dev; Cloudflare Tunnel
-// collapses front+back behind manage.karta.cards in the demo).
+// same origin (Vite proxies to the admin backend in dev; Cloudflare routes
+// manage.karta.cards to the admin service in production).
 //
-// Every request carries X-Admin-Key from sessionStorage.  A 401 response
-// clears the stored key and triggers the App-level gate to re-prompt.
+// Every request carries a Cognito ID token (Authorization: Bearer).  A 401
+// response clears stored tokens and triggers a re-login prompt.
 
-const KEY_STORAGE = 'vera.adminKey';
-const TOKEN_STORAGE = 'admin_token';
-// Must match ADMIN_KEY_HEADER in services/admin/src/middleware/require-admin-key.ts.
-const ADMIN_KEY_HEADER = 'x-admin-key';
-
-export function getAdminKey(): string | null {
-  return sessionStorage.getItem(KEY_STORAGE);
-}
-
-export function setAdminKey(key: string): void {
-  sessionStorage.setItem(KEY_STORAGE, key);
-}
-
-export function clearAdminKey(): void {
-  sessionStorage.removeItem(KEY_STORAGE);
-}
+const ID_TOKEN_STORAGE = 'vera.adminIdToken';
+const REFRESH_TOKEN_STORAGE = 'vera.adminRefreshToken';
 
 export function getAuthToken(): string | null {
-  return localStorage.getItem(TOKEN_STORAGE);
+  return localStorage.getItem(ID_TOKEN_STORAGE);
 }
 
 export function setAuthToken(token: string): void {
-  localStorage.setItem(TOKEN_STORAGE, token);
+  localStorage.setItem(ID_TOKEN_STORAGE, token);
 }
 
 export function clearAuthToken(): void {
-  localStorage.removeItem(TOKEN_STORAGE);
+  localStorage.removeItem(ID_TOKEN_STORAGE);
+  localStorage.removeItem(REFRESH_TOKEN_STORAGE);
+}
+
+export function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_TOKEN_STORAGE);
+}
+
+export function setRefreshToken(token: string): void {
+  localStorage.setItem(REFRESH_TOKEN_STORAGE, token);
 }
 
 /**
- * Subscribe to 401 responses from the API layer.  App.tsx uses this to drop
- * back to the key-entry screen without a full page reload, preserving any
- * in-flight user input elsewhere in the UI.
+ * Subscribe to 401 responses from the API layer.  Admin.tsx uses this to drop
+ * back to the login screen when the JWT expires.
  */
 type UnauthorizedHandler = () => void;
 let unauthorizedHandler: UnauthorizedHandler | null = null;
@@ -62,10 +56,8 @@ export class ApiError extends Error {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   if (body) headers['content-type'] = 'application/json';
-  const adminKey = getAdminKey();
-  if (adminKey) headers[ADMIN_KEY_HEADER] = adminKey;
-  const authToken = getAuthToken();
-  if (authToken) headers['authorization'] = `Bearer ${authToken}`;
+  const token = getAuthToken();
+  if (token) headers['authorization'] = `Bearer ${token}`;
 
   const res = await fetch(`/api${path}`, {
     method,
@@ -75,7 +67,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const raw = await res.text();
   const data = raw ? JSON.parse(raw) : undefined;
   if (res.status === 401) {
-    clearAdminKey();
+    clearAuthToken();
     unauthorizedHandler?.();
   }
   if (!res.ok) {

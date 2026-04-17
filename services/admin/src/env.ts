@@ -9,16 +9,13 @@ const { get: getAdminConfig, reset: _resetAdminConfig } = defineEnv({
   CORS_ORIGINS: originList,
   PORT: z.coerce.number().int().positive().default(3005),
   WEBAUTHN_ORIGIN: z.string().url().default('https://manage.karta.cards'),
-  // Browser-facing admin auth.  32-byte hex sent as X-Admin-Key header on every
-  // admin API call.  Compared in constant time against this value; no roles,
-  // no rotation, no sessions — minimum defensible auth for the prototype.
-  ADMIN_API_KEY: hexKey(32),
   // Vault leg — admin backend signs outbound vault calls as keyId='admin'.
   VAULT_SERVICE_URL: z.string().url().default('http://localhost:3004'),
   SERVICE_AUTH_ADMIN_SECRET: hexKey(32),
   // Activation leg — batch CSV ingestion calls activation's /api/cards/register.
   ACTIVATION_SERVICE_URL: z.string().url().default('http://localhost:3002'),
-  // Cognito MFA — second auth factor alongside X-Admin-Key.
+  // Cognito — browser-facing auth.  MFA enforced at the pool level;
+  // 'admin' group membership gates access at the middleware level.
   COGNITO_USER_POOL_ID: z.string().default('ap-southeast-2_Db4d1vpIV'),
   COGNITO_CLIENT_ID: z.string().default('7pj9230obhsa6h6vrvk9tru7do'),
 });

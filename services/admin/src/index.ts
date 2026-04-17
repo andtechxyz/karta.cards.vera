@@ -5,7 +5,6 @@ import helmet from 'helmet';
 import { errorMiddleware, serveFrontend, apiRateLimit } from '@vera/core';
 import { createCognitoAuthMiddleware } from '@vera/cognito-auth';
 import { getAdminConfig } from './env.js';
-import { ADMIN_KEY_HEADER, requireAdminKey } from './middleware/require-admin-key.js';
 import programsRouter from './routes/programs.routes.js';
 import cardsRouter from './routes/cards.routes.js';
 import vaultProxyRouter from './routes/vault-proxy.routes.js';
@@ -22,7 +21,7 @@ app.use(helmet({
     },
   },
 }));
-app.use(cors({ origin: config.CORS_ORIGINS, credentials: false, allowedHeaders: ['content-type', ADMIN_KEY_HEADER, 'authorization'] }));
+app.use(cors({ origin: config.CORS_ORIGINS, credentials: false, allowedHeaders: ['content-type', 'authorization'] }));
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '64kb' }));
 
@@ -34,16 +33,18 @@ app.get('/api/health', (_req, res) => {
 // Rate limit all API routes before auth checks.
 app.use('/api', apiRateLimit);
 
-// Cognito JWT verified first, then X-Admin-Key.  Both must pass.
-const cognitoAuth = createCognitoAuthMiddleware({
+// Cognito JWT with 'admin' group membership required.
+// MFA is enforced at the Cognito pool level — the JWT is only issued after
+// password + TOTP.  Group check gates access to admin-only resources.
+const adminAuth = createCognitoAuthMiddleware({
   userPoolId: config.COGNITO_USER_POOL_ID,
   clientId: config.COGNITO_CLIENT_ID,
+  requiredGroup: 'admin',
 });
-const adminGate = requireAdminKey(config.ADMIN_API_KEY);
-app.use('/api/programs', cognitoAuth, adminGate, programsRouter);
-app.use('/api/cards', cognitoAuth, adminGate, cardsRouter);
-app.use('/api/admin/vault', cognitoAuth, adminGate, vaultProxyRouter);
-app.use('/api/admin', cognitoAuth, adminGate, provisioningRouter);
+app.use('/api/programs', adminAuth, programsRouter);
+app.use('/api/cards', adminAuth, cardsRouter);
+app.use('/api/admin/vault', adminAuth, vaultProxyRouter);
+app.use('/api/admin', adminAuth, provisioningRouter);
 
 serveFrontend(app, import.meta.url);
 app.use(errorMiddleware);
