@@ -14,6 +14,8 @@ import micrositesRouter from './routes/microsites.routes.js';
 import financialInstitutionsRouter from './routes/financial-institutions.routes.js';
 import embossingTemplatesRouter from './routes/embossing-templates.routes.js';
 import embossingBatchesRouter from './routes/embossing-batches.routes.js';
+import partnerCredentialsRouter from './routes/partner-credentials.routes.js';
+import partnerIngestionRouter, { partnerHmacMiddleware } from './routes/partner-ingestion.routes.js';
 
 const config = getAdminConfig();
 const app = express();
@@ -54,6 +56,11 @@ app.use('/api/admin/financial-institutions', adminAuth, financialInstitutionsRou
 // Mounted on the same base so /api/admin/financial-institutions/:fiId/embossing-templates
 // resolves through the embossing-templates router.
 app.use('/api/admin/financial-institutions', adminAuth, embossingTemplatesRouter);
+// Partner credential management (Cognito-gated — admin UI only)
+app.use('/api/admin/financial-institutions', adminAuth, partnerCredentialsRouter);
+// Partner ingestion endpoint (HMAC-authenticated — partner's secret, NOT Cognito).
+// Mounted OUTSIDE /api/admin so adminAuth doesn't intercept partner calls.
+app.use('/api/partners', partnerHmacMiddleware(), partnerIngestionRouter);
 app.use('/api/admin', adminAuth, provisioningRouter);
 // Microsite uploads handle their own multipart body parsing (no global
 // express.json() interference) and must sit on /api/admin/programs/...

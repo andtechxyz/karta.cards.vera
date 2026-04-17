@@ -23,3 +23,7 @@ export type { CardData, IssuerProfileForSad } from './sad-builder.js';
 export { APDUBuilder } from './apdu-builder.js';
 export { buildIccPkCertificate } from './icc-cert-builder.js';
 export type { IccCertInput } from './icc-cert-builder.js';
+
+// Embossing file parsing
+export type { EmbossingParser, EmbossingRecord, ParseResult, ParseError } from './embossing-parser.js';
+export { getParser, parsers, csvParser, fixedWidthParser } from './parsers/index.js';

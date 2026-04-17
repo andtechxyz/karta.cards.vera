@@ -61,10 +61,52 @@ model FinancialInstitution {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  programs  Program[]
-  templates EmbossingTemplate[]
+  programs    Program[]
+  templates   EmbossingTemplate[]
+  credentials PartnerCredential[]
 
   @@index([slug])
+}
+
+// ---------------------------------------------------------------------------
+// Partner API Credentials
+// ---------------------------------------------------------------------------
+//
+// Partner API credential for batch file ingestion.  Each FI can issue
+// multiple keyed credentials (e.g. one per upstream processor, or for
+// key rotation).  Secrets are stored hashed (scrypt) — never plaintext.
+// The secret is shown once at creation and never again.
+model PartnerCredential {
+  id                     String               @id @default(cuid())
+  financialInstitutionId String
+  financialInstitution   FinancialInstitution @relation(fields: [financialInstitutionId], references: [id], onDelete: Cascade)
+
+  // Partner-supplied identifier (e.g. "incomm-embossing-prod")
+  keyId      String @unique
+  // Hashed secret — constant-time comparable.  scrypt with a per-record
+  // salt; the secret itself is 256-bit random (not a user password) so
+  // we keep scrypt's default cost for rate-limiting at verify time.
+  secretHash String
+  salt       String
+
+  // Optional description for audit
+  description String?
+
+  // Status + lifecycle
+  status        String    @default("ACTIVE") // ACTIVE | REVOKED
+  revokedAt     DateTime?
+  revokedReason String?
+
+  // Last-used tracking for audit
+  lastUsedAt DateTime?
+  lastUsedIp String?
+
+  createdBy String // cognitoSub
+  createdAt DateTime @default(now())
+
+  @@index([financialInstitutionId])
+  @@index([keyId])
+  @@index([status])
 }
 
 // ---------------------------------------------------------------------------
