@@ -23,6 +23,12 @@ const { get: getAdminConfig, reset: _resetAdminConfig } = defineEnv({
   // 'admin' group membership gates access at the middleware level.
   COGNITO_USER_POOL_ID: z.string().default('ap-southeast-2_Db4d1vpIV'),
   COGNITO_CLIENT_ID: z.string().default('7pj9230obhsa6h6vrvk9tru7do'),
+  // --- Microsites ---------------------------------------------------------
+  // S3 bucket that backs microsite.karta.cards (served via CloudFront OAC).
+  // Admin uploads zips here; the CDN rewrites /programs/<id>/... to the
+  // currently-active MicrositeVersion's S3 prefix.
+  MICROSITE_BUCKET: z.string().default('karta-microsites-600743178530'),
+  MICROSITE_CDN_URL: z.string().url().default('https://microsite.karta.cards'),
 });
 
 export { getAdminConfig, _resetAdminConfig };

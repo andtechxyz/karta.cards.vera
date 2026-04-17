@@ -33,6 +33,7 @@ export default function Activate() {
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [err, setErr] = useState<string | null>(null);
+  const [micrositeUrl, setMicrositeUrl] = useState<string | null>(null);
 
   const device = useMemo(detectDevice, []);
 
@@ -61,13 +62,27 @@ export default function Activate() {
     setPhase('busy');
     setErr(null);
     try {
-      await activateWithSession({ sessionToken, deviceLabel: deviceNameGuess() });
+      const result = await activateWithSession({ sessionToken, deviceLabel: deviceNameGuess() });
+      if (result.micrositeUrl) {
+        setMicrositeUrl(result.micrositeUrl);
+      }
       setPhase('done');
     } catch (e) {
       setErr(errorMsg(e));
       setPhase('idle');
     }
   }, [sessionToken]);
+
+  // When activation succeeds and the program has a microsite configured,
+  // redirect after a 2s delay so the user sees the confirmation screen first.
+  useEffect(() => {
+    if (phase === 'done' && micrositeUrl) {
+      const t = setTimeout(() => {
+        window.location.href = micrositeUrl;
+      }, 2000);
+      return () => clearTimeout(t);
+    }
+  }, [phase, micrositeUrl]);
 
   // Auto-fire the WebAuthn ceremony as soon as we have a session — the user
   // has already tapped once to get here; making them push a button before
@@ -112,10 +127,16 @@ export default function Activate() {
   if (phase === 'done') {
     return (
       <Page title="Card activated" tone="ok">
-        <p className="small">
-          You can now use the card for payments. {biometricHint(device)} can be added
-          at first checkout.
-        </p>
+        {micrositeUrl ? (
+          <p className="small">
+            Redirecting you to your card's welcome page…
+          </p>
+        ) : (
+          <p className="small">
+            You can now use the card for payments. {biometricHint(device)} can be added
+            at first checkout.
+          </p>
+        )}
       </Page>
     );
   }

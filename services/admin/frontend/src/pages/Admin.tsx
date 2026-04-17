@@ -1446,17 +1446,15 @@ function IssuerProfileForm({
   const [cvn, setCvn] = useState('18');
   const [imkAlgorithm, setImkAlgorithm] = useState('');
   const [derivationMethod, setDerivationMethod] = useState('');
-  const [tmkKeyArn, setTmkKeyArn] = useState('');
-  const [imkAcKeyArn, setImkAcKeyArn] = useState('');
-  const [imkSmiKeyArn, setImkSmiKeyArn] = useState('');
-  const [imkSmcKeyArn, setImkSmcKeyArn] = useState('');
-  const [imkIdnKeyArn, setImkIdnKeyArn] = useState('');
-  const [issuerPkKeyArn, setIssuerPkKeyArn] = useState('');
   const [aid, setAid] = useState('');
   const [appLabel, setAppLabel] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // NOTE: Key ARNs are NOT accepted from this form.  Keys must be imported
+  // via the `scripts/import-issuer-keys.ts` CLI tool which uses AWS Payment
+  // Cryptography's ImportKey API with TR-31 wrapped key blocks (dual-control
+  // key ceremony).  This prevents browser-originated key material / ARNs.
   const save = async () => {
     setErr(null);
     setBusy(true);
@@ -1468,12 +1466,6 @@ function IssuerProfileForm({
         cvn: Number(cvn),
         imkAlgorithm: imkAlgorithm || undefined,
         derivationMethod: derivationMethod || undefined,
-        tmkKeyArn: tmkKeyArn || undefined,
-        imkAcKeyArn: imkAcKeyArn || undefined,
-        imkSmiKeyArn: imkSmiKeyArn || undefined,
-        imkSmcKeyArn: imkSmcKeyArn || undefined,
-        imkIdnKeyArn: imkIdnKeyArn || undefined,
-        issuerPkKeyArn: issuerPkKeyArn || undefined,
         aid: aid || undefined,
         appLabel: appLabel || undefined,
       });
@@ -1538,26 +1530,16 @@ function IssuerProfileForm({
         </div>
       </div>
 
-      <h3 style={{ marginTop: 20 }}>Key ARNs</h3>
-      <p className="small">AWS Payment Cryptography key ARNs for each master key.</p>
-
-      <label>TMK Key ARN</label>
-      <input value={tmkKeyArn} onChange={(e) => setTmkKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
-
-      <label>IMK-AC Key ARN</label>
-      <input value={imkAcKeyArn} onChange={(e) => setImkAcKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
-
-      <label>IMK-SMI Key ARN</label>
-      <input value={imkSmiKeyArn} onChange={(e) => setImkSmiKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
-
-      <label>IMK-SMC Key ARN</label>
-      <input value={imkSmcKeyArn} onChange={(e) => setImkSmcKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
-
-      <label>IMK-IDN Key ARN</label>
-      <input value={imkIdnKeyArn} onChange={(e) => setImkIdnKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
-
-      <label>Issuer PK Key ARN</label>
-      <input value={issuerPkKeyArn} onChange={(e) => setIssuerPkKeyArn(e.target.value)} className="mono" placeholder="arn:aws:payment-cryptography:..." />
+      <div className="panel" style={{ marginTop: 20, background: '#fff8e1', borderLeft: '3px solid #f59e0b' }}>
+        <strong>🔐 Key ARNs are not set from this form.</strong>
+        <p className="small" style={{ margin: '6px 0 0 0' }}>
+          AWS Payment Cryptography master keys (TMK, IMK-AC, IMK-SMI, IMK-SMC, IMK-IDN,
+          Issuer PK) must be imported via the <code>scripts/import-issuer-keys.ts</code> CLI
+          tool using TR-31 wrapped key blocks. This ensures a dual-control key ceremony
+          with no key material or ARNs originating from the browser. ARNs populate
+          automatically once a key ceremony is completed for this profile.
+        </p>
+      </div>
 
       <h3 style={{ marginTop: 20 }}>EMV Constants</h3>
 

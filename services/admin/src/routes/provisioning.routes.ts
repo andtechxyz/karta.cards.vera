@@ -64,6 +64,12 @@ router.delete('/chip-profiles/:id', async (req, res) => {
 // Issuer Profiles
 // ---------------------------------------------------------------------------
 
+// Issuer profile creation/update via browser is LIMITED to non-sensitive
+// metadata.  AWS Payment Cryptography key ARNs (TMK, IMK-AC/SMI/SMC/IDN,
+// Issuer PK) are set ONLY via the scripts/import-issuer-keys.ts CLI which
+// takes TR-31 wrapped key blocks (dual-control ceremony), calls AWS PC
+// ImportKey, records the ARN + KCV + audit entry.
+// Prevents a compromised browser session from setting arbitrary key ARNs.
 const createIssuerProfileSchema = z.object({
   programId: z.string().min(1),
   chipProfileId: z.string().min(1),
@@ -71,15 +77,9 @@ const createIssuerProfileSchema = z.object({
   cvn: z.coerce.number().int(),
   imkAlgorithm: z.string().optional(),
   derivationMethod: z.string().optional(),
-  tmkKeyArn: z.string().optional(),
-  imkAcKeyArn: z.string().optional(),
-  imkSmiKeyArn: z.string().optional(),
-  imkSmcKeyArn: z.string().optional(),
-  imkIdnKeyArn: z.string().optional(),
-  issuerPkKeyArn: z.string().optional(),
   aid: z.string().optional(),
   appLabel: z.string().optional(),
-});
+}).strict(); // reject unknown fields — no ARN injection
 
 const patchIssuerProfileSchema = createIssuerProfileSchema
   .partial()

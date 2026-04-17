@@ -619,3 +619,46 @@ model ProvisioningSession {
   @@index([cardId])
   @@index([phase])
 }
+
+// ---------------------------------------------------------------------------
+// Microsites
+// ---------------------------------------------------------------------------
+//
+// A MicrositeVersion is an immutable snapshot of a program's static website,
+// uploaded by an admin as a zip archive.  The zip is extracted and each file
+// is pushed to S3 under the `s3Prefix` (e.g. "programs/prog_mc_plat_01/v_...").
+// CloudFront (microsite.karta.cards) serves the files; a CloudFront function
+// rewrites incoming requests for /programs/<programId>/... to the currently
+// active version's prefix, using Program.micrositeActiveVersion as the
+// pointer.  Swapping versions is a single DB UPDATE — no re-upload needed.
+//
+// Versions are never mutated after creation; to publish a change, admin
+// uploads a new version and activates it.  Old versions stick around so
+// rollback is a one-click operation.
+
+model MicrositeVersion {
+  id      String  @id @default(cuid())
+  programId String
+  program   Program @relation(fields: [programId], references: [id])
+
+  // Human-readable version label (e.g. "v1", "2026-04-17-build-3").  Unique
+  // per program.
+  version String
+
+  // S3 prefix under the microsites bucket.  All files for this version live
+  // under this prefix; deleting the version wipes every object under it.
+  // Example: "programs/prog_mc_plat_01/v_1713340000000_abc123/"
+  s3Prefix String
+
+  // Cognito sub of the admin who uploaded the zip.
+  uploadedBy String
+
+  // File count + total size in bytes, for display in the admin UI.
+  fileCount  Int
+  totalBytes Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([programId, version])
+  @@index([programId])
+}

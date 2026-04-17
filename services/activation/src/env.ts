@@ -25,6 +25,9 @@ const { get: getActivationConfig, reset: _resetActivationConfig } = defineEnv({
   // AWS Cognito — mobile app JWT verification
   COGNITO_USER_POOL_ID: z.string().default('ap-southeast-2_Db4d1vpIV'),
   COGNITO_CLIENT_ID: z.string().default('7pj9230obhsa6h6vrvk9tru7do'),
+  // Base URL of the per-program microsite CDN.  Activation builds a redirect
+  // target against this host when the card's program has a microsite live.
+  MICROSITE_CDN_URL: z.string().url().default('https://microsite.karta.cards'),
 });
 
 export { getActivationConfig, _resetActivationConfig };

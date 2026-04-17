@@ -10,6 +10,7 @@ import cardsRouter from './routes/cards.routes.js';
 import vaultProxyRouter from './routes/vault-proxy.routes.js';
 import provisioningRouter from './routes/provisioning.routes.js';
 import payProxyRouter from './routes/pay-proxy.routes.js';
+import micrositesRouter from './routes/microsites.routes.js';
 
 const config = getAdminConfig();
 const app = express();
@@ -46,6 +47,9 @@ app.use('/api/programs', adminAuth, programsRouter);
 app.use('/api/cards', adminAuth, cardsRouter);
 app.use('/api/admin/vault', adminAuth, vaultProxyRouter);
 app.use('/api/admin', adminAuth, provisioningRouter);
+// Microsite uploads handle their own multipart body parsing (no global
+// express.json() interference) and must sit on /api/admin/programs/...
+app.use('/api/admin', adminAuth, micrositesRouter);
 // Pay service proxy for admin UI's transaction tabs
 app.use('/api', adminAuth, payProxyRouter);
 

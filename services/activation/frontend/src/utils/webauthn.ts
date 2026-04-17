@@ -73,7 +73,7 @@ export async function authenticate(input: {
 export async function activateWithSession(input: {
   sessionToken: string;
   deviceLabel?: string;
-}): Promise<{ credentialId: string; cardActivated: true }> {
+}): Promise<{ credentialId: string; cardActivated: true; micrositeUrl: string | null }> {
   const path = `/activation/sessions/${encodeURIComponent(input.sessionToken)}`;
   const options = await api.post<Parameters<typeof startRegistration>[0]>(`${path}/begin`);
 
