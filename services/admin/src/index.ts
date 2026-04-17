@@ -12,6 +12,8 @@ import provisioningRouter from './routes/provisioning.routes.js';
 import payProxyRouter from './routes/pay-proxy.routes.js';
 import micrositesRouter from './routes/microsites.routes.js';
 import financialInstitutionsRouter from './routes/financial-institutions.routes.js';
+import embossingTemplatesRouter from './routes/embossing-templates.routes.js';
+import embossingBatchesRouter from './routes/embossing-batches.routes.js';
 
 const config = getAdminConfig();
 const app = express();
@@ -48,10 +50,16 @@ app.use('/api/programs', adminAuth, programsRouter);
 app.use('/api/cards', adminAuth, cardsRouter);
 app.use('/api/admin/vault', adminAuth, vaultProxyRouter);
 app.use('/api/admin/financial-institutions', adminAuth, financialInstitutionsRouter);
+// Embossing template CRUD sits under the same FI path prefix, nested by :fiId.
+// Mounted on the same base so /api/admin/financial-institutions/:fiId/embossing-templates
+// resolves through the embossing-templates router.
+app.use('/api/admin/financial-institutions', adminAuth, embossingTemplatesRouter);
 app.use('/api/admin', adminAuth, provisioningRouter);
 // Microsite uploads handle their own multipart body parsing (no global
 // express.json() interference) and must sit on /api/admin/programs/...
 app.use('/api/admin', adminAuth, micrositesRouter);
+// Embossing batches — program-scoped multipart uploads, same pattern as microsites.
+app.use('/api/admin/programs', adminAuth, embossingBatchesRouter);
 // Pay service proxy for admin UI's transaction tabs
 app.use('/api', adminAuth, payProxyRouter);
 

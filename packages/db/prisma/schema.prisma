@@ -61,9 +61,106 @@ model FinancialInstitution {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  programs Program[]
+  programs  Program[]
+  templates EmbossingTemplate[]
 
   @@index([slug])
+}
+
+// ---------------------------------------------------------------------------
+// Embossing Templates
+// ---------------------------------------------------------------------------
+//
+// An FI uploads templates describing the format of their embossing files.
+// One template can support multiple card schemes (Visa + Mastercard share
+// the same record layout but differ in BIN ranges / service codes).
+//
+// The template file itself is encrypted at rest (AES-256-GCM).  Ingestion
+// parses it at upload time to extract metadata (field count, record length)
+// for display, but the encrypted blob is the source of truth for the
+// batch parser at runtime.
+model EmbossingTemplate {
+  id                     String               @id @default(cuid())
+  financialInstitutionId String
+  financialInstitution   FinancialInstitution @relation(fields: [financialInstitutionId], references: [id], onDelete: Restrict)
+
+  name               String // human label e.g. "InComm Standard v2"
+  description        String?
+  // Supported schemes — a template can cover multiple
+  supportsVisa       Boolean @default(false)
+  supportsMastercard Boolean @default(false)
+  supportsAmex       Boolean @default(false)
+
+  // File format type — determines which parser plugin handles it
+  formatType String // "episode_six" | "fixed_width" | "csv" | "xml" | etc.
+
+  // Encrypted template file (AES-256-GCM via KMS envelope encryption).
+  // Stored inline in DB because templates are small (<10MB) and rarely
+  // accessed — keeps ops simple vs S3 for such small files.
+  templateEncrypted  Bytes
+  templateKeyVersion Int
+  templateSha256     String // plaintext SHA-256 for integrity
+  templateFileName   String // original file name
+
+  // Extracted metadata (non-sensitive, for display only)
+  recordLength Int?
+  fieldCount   Int?
+  parserMeta   Json? // format-specific metadata
+
+  uploadedBy String // cognitoSub
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  programs Program[]
+  batches  EmbossingBatch[]
+
+  @@index([financialInstitutionId])
+}
+
+// ---------------------------------------------------------------------------
+// Embossing Batches
+// ---------------------------------------------------------------------------
+//
+// A batch IS an actual card-data file following a template.  Uploaded
+// via admin UI, SFTP, or API.  The raw file is encrypted at rest (KMS SSE)
+// in a dedicated S3 bucket.  A background processor parses records and
+// routes each to the vault via the existing registerCard flow.
+//
+// The raw file is retained (encrypted) for audit/reprocessing, NOT for
+// future lookups — once processed, PANs live only in the vault.
+model EmbossingBatch {
+  id         String            @id @default(cuid())
+  templateId String
+  template   EmbossingTemplate @relation(fields: [templateId], references: [id])
+  programId  String
+  program    Program           @relation(fields: [programId], references: [id])
+
+  // Original upload metadata
+  fileName String
+  fileSize Int
+  sha256   String // integrity hash of raw file
+
+  // S3 pointer — file encrypted at rest via SSE-KMS on the bucket.
+  s3Bucket String
+  s3Key    String
+
+  // Processing status + counters
+  status          String  @default("RECEIVED") // RECEIVED | PROCESSING | PROCESSED | FAILED
+  recordCount     Int? // total records parsed
+  recordsSuccess  Int     @default(0)
+  recordsFailed   Int     @default(0)
+  processingError String?
+
+  // Provenance
+  uploadedVia String // "UI" | "SFTP" | "API"
+  uploadedBy  String? // cognitoSub or partner keyId
+  uploadedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([programId])
+  @@index([templateId])
+  @@index([status])
+  @@index([uploadedAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -124,12 +221,17 @@ model Program {
   financialInstitutionId String?
   financialInstitution   FinancialInstitution? @relation(fields: [financialInstitutionId], references: [id], onDelete: Restrict)
 
+  // Embossing template this program uses for batch card ingestion.
+  embossingTemplateId String?
+  embossingTemplate   EmbossingTemplate? @relation(fields: [embossingTemplateId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   cards             Card[]
   issuerProfile     IssuerProfile?
   micrositeVersions MicrositeVersion[]
+  embossingBatches  EmbossingBatch[]
 
   // Program-scoped chip profiles (nullable FK on ChipProfile.programId)
   scopedChipProfiles ChipProfile[] @relation("ProgramChipProfiles")

@@ -28,6 +28,7 @@ const upsertBaseSchema = z.object({
   preActivationNdefUrlTemplate: z.string().url().nullable().optional(),
   postActivationNdefUrlTemplate: z.string().url().nullable().optional(),
   financialInstitutionId: z.string().optional(),
+  embossingTemplateId: z.string().nullable().optional(),
 });
 
 const createSchema = upsertBaseSchema.extend({

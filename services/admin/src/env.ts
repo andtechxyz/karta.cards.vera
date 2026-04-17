@@ -29,6 +29,15 @@ const { get: getAdminConfig, reset: _resetAdminConfig } = defineEnv({
   // currently-active MicrositeVersion's S3 prefix.
   MICROSITE_BUCKET: z.string().default('karta-microsites-600743178530'),
   MICROSITE_CDN_URL: z.string().url().default('https://microsite.karta.cards'),
+  // --- Embossing ----------------------------------------------------------
+  // S3 bucket storing encrypted raw embossing batch files (SSE-KMS) and the
+  // AES-256-GCM DEK for per-FI template-file encryption at rest in the DB.
+  // Keyspace is distinct from the vault PAN DEK — templates are format specs,
+  // not cardholder data (PANs inside a batch still route through the vault).
+  EMBOSSING_BUCKET: z.string().default('karta-embossing-files-600743178530'),
+  EMBOSSING_KMS_KEY_ARN: z.string().default(''),
+  EMBOSSING_KEY_V1: hexKey(32).default('0'.repeat(64)),
+  EMBOSSING_KEY_ACTIVE_VERSION: z.coerce.number().int().positive().default(1),
 });
 
 export { getAdminConfig, _resetAdminConfig };

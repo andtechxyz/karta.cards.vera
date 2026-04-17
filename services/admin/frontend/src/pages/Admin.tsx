@@ -14,7 +14,7 @@ import { CREDENTIAL_KINDS, type CredentialKind } from '../utils/webauthn';
 // SDM URL fires → /activate?session=<token>.  Admin sees the resulting
 // state but cannot mint sessions or links itself.
 
-type TabKey = 'financialInstitutions' | 'cards' | 'vault' | 'programs' | 'transactions' | 'audit' | 'chipProfiles' | 'keyMgmt' | 'batches' | 'provMonitor' | 'microsites';
+type TabKey = 'financialInstitutions' | 'cards' | 'vault' | 'programs' | 'transactions' | 'audit' | 'chipProfiles' | 'keyMgmt' | 'batches' | 'provMonitor' | 'microsites' | 'embossingTemplates' | 'embossingBatches';
 
 interface ActivationSessionRow {
   id: string;
@@ -266,7 +266,7 @@ export default function Admin() {
       </div>
       <p className="small">Cards, vault, WebAuthn credentials, transactions, audit.</p>
       <div className="tabs">
-        {(['financialInstitutions', 'cards', 'vault', 'programs', 'transactions', 'audit', 'chipProfiles', 'keyMgmt', 'batches', 'provMonitor', 'microsites'] as const).map((t) => (
+        {(['financialInstitutions', 'cards', 'vault', 'programs', 'transactions', 'audit', 'chipProfiles', 'keyMgmt', 'batches', 'provMonitor', 'microsites', 'embossingTemplates', 'embossingBatches'] as const).map((t) => (
           <button
             key={t}
             className={`tab ${tab === t ? 'active' : ''}`}
@@ -287,6 +287,8 @@ export default function Admin() {
       {tab === 'batches' && <BatchesTab />}
       {tab === 'provMonitor' && <ProvMonitorTab />}
       {tab === 'microsites' && <MicrositesTab />}
+      {tab === 'embossingTemplates' && <EmbossingTemplatesTab />}
+      {tab === 'embossingBatches' && <EmbossingBatchesTab />}
     </div>
   );
 }
@@ -303,6 +305,8 @@ const labels: Record<TabKey, string> = {
   batches: 'Batches',
   provMonitor: 'Provisioning Monitor',
   microsites: 'Microsites',
+  embossingTemplates: 'Embossing Templates',
+  embossingBatches: 'Embossing Batches',
 };
 
 // --- Cards tab ---------------------------------------------------------------
@@ -803,6 +807,8 @@ interface Program {
   postActivationNdefUrlTemplate: string | null;
   financialInstitutionId: string | null;
   financialInstitution?: { id: string; name: string; slug: string } | null;
+  embossingTemplateId: string | null;
+  embossingTemplate?: { id: string; name: string } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -915,6 +921,7 @@ function ProgramsTab() {
               <th>Currency</th>
               <th>Rules</th>
               <th>NDEF templates</th>
+              <th>Embossing</th>
               <th>Updated</th>
               <th></th>
             </tr>
@@ -931,6 +938,9 @@ function ProgramsTab() {
                   {p.preActivationNdefUrlTemplate ? 'pre ✓' : 'pre —'}
                   {' / '}
                   {p.postActivationNdefUrlTemplate ? 'post ✓' : 'post —'}
+                </td>
+                <td className="small">
+                  {p.embossingTemplate?.name ?? <span className="small">—</span>}
                 </td>
                 <td className="small">{formatDate(p.updatedAt)}</td>
                 <td>
@@ -980,8 +990,35 @@ function ProgramForm({
   );
   const [pre, setPre] = useState(program?.preActivationNdefUrlTemplate ?? '');
   const [post, setPost] = useState(program?.postActivationNdefUrlTemplate ?? '');
+  const [embossingTemplateId, setEmbossingTemplateId] = useState<string>(
+    program?.embossingTemplateId ?? '',
+  );
+  const [templates, setTemplates] = useState<EmbossingTemplateRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Load templates for the selected FI; reset the selection when the FI changes
+  // (templates from the previous FI are no longer valid choices).
+  useEffect(() => {
+    if (!financialInstitutionId) {
+      setTemplates([]);
+      return;
+    }
+    api.get<EmbossingTemplateRow[]>(
+      `/admin/financial-institutions/${financialInstitutionId}/embossing-templates`,
+    )
+      .then(setTemplates)
+      .catch(() => setTemplates([]));
+  }, [financialInstitutionId]);
+
+  // If the FI changes away from the one the current embossing template belongs
+  // to, clear the selection so we never save a stale cross-FI reference.
+  useEffect(() => {
+    if (!embossingTemplateId) return;
+    if (templates.length > 0 && !templates.some((t) => t.id === embossingTemplateId)) {
+      setEmbossingTemplateId('');
+    }
+  }, [templates, embossingTemplateId]);
 
   const save = async () => {
     setErr(null);
@@ -994,6 +1031,7 @@ function ProgramForm({
         preActivationNdefUrlTemplate: pre.trim() ? pre.trim() : null,
         postActivationNdefUrlTemplate: post.trim() ? post.trim() : null,
         financialInstitutionId: financialInstitutionId || undefined,
+        embossingTemplateId: embossingTemplateId ? embossingTemplateId : null,
       };
       if (program) {
         await api.patch<Program>(`/programs/${program.id}`, body);
@@ -1082,6 +1120,25 @@ function ProgramForm({
         className="mono"
         placeholder="https://pay.karta.cards/tap/{cardRef}?e={PICCData}&m={CMAC}"
       />
+
+      <h3 style={{ marginTop: 20 }}>Embossing template</h3>
+      <p className="small">
+        Defines how batch card-data files are parsed into vault records.
+        Templates are FI-scoped — create them under the Embossing Templates
+        tab.
+      </p>
+      <label>Template</label>
+      <select
+        value={embossingTemplateId}
+        onChange={(e) => setEmbossingTemplateId(e.target.value)}
+      >
+        <option value="">(none — batch uploads disabled)</option>
+        {templates.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name} ({t.formatType})
+          </option>
+        ))}
+      </select>
 
       <div style={{ marginTop: 16 }}>
         <button
@@ -2430,6 +2487,550 @@ function MicrositesTab() {
       )}
     </div>
   );
+}
+
+// --- Embossing Templates tab -------------------------------------------------
+//
+// Templates are FI-scoped schema definitions describing how to parse an
+// embossing batch file.  A template can cover multiple card schemes because
+// Visa + Mastercard share the same record layout in most formats.  The
+// underlying template file is encrypted at rest (separate keyspace from the
+// vault PAN DEK) so proprietary layouts don't leak from the DB.
+
+interface EmbossingTemplateRow {
+  id: string;
+  name: string;
+  description: string | null;
+  supportsVisa: boolean;
+  supportsMastercard: boolean;
+  supportsAmex: boolean;
+  formatType: string;
+  recordLength: number | null;
+  fieldCount: number | null;
+  templateFileName: string;
+  templateSha256: string;
+  uploadedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function EmbossingTemplatesTab() {
+  const [fis, setFis] = useState<FinancialInstitution[]>([]);
+  const [selectedFiId, setSelectedFiId] = useState<string>('');
+  const [templates, setTemplates] = useState<EmbossingTemplateRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  // Upload form state
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [formatType, setFormatType] = useState('episode_six');
+  const [supportsVisa, setSupportsVisa] = useState(false);
+  const [supportsMastercard, setSupportsMastercard] = useState(false);
+  const [supportsAmex, setSupportsAmex] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    api.get<FinancialInstitution[]>('/admin/financial-institutions')
+      .then((list) => {
+        setFis(list);
+        if (list.length > 0) setSelectedFiId((prev) => prev || list[0].id);
+      })
+      .catch((e) => setErr(errorMsg(e)));
+  }, []);
+
+  const load = useCallback(async () => {
+    if (!selectedFiId) {
+      setTemplates([]);
+      return;
+    }
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await api.get<EmbossingTemplateRow[]>(
+        `/admin/financial-institutions/${selectedFiId}/embossing-templates`,
+      );
+      setTemplates(r);
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedFiId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleUpload = async () => {
+    if (!selectedFiId || !file) return;
+    setErr(null);
+    setOk(null);
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (name.trim()) formData.append('name', name.trim());
+      if (description.trim()) formData.append('description', description.trim());
+      formData.append('formatType', formatType);
+      formData.append('supportsVisa', String(supportsVisa));
+      formData.append('supportsMastercard', String(supportsMastercard));
+      formData.append('supportsAmex', String(supportsAmex));
+      const token = getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers['authorization'] = `Bearer ${token}`;
+      const res = await fetch(
+        `/api/admin/financial-institutions/${selectedFiId}/embossing-templates`,
+        { method: 'POST', headers, body: formData },
+      );
+      const raw = await res.text();
+      const respData = raw ? JSON.parse(raw) : undefined;
+      if (!res.ok) {
+        throw new Error(respData?.error?.message ?? `HTTP ${res.status}`);
+      }
+      const newTpl = respData as EmbossingTemplateRow;
+      setOk(`Uploaded template "${newTpl.name}"`);
+      setName('');
+      setDescription('');
+      setFile(null);
+      setSupportsVisa(false);
+      setSupportsMastercard(false);
+      setSupportsAmex(false);
+      await load();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDelete = async (templateId: string) => {
+    if (!selectedFiId) return;
+    setErr(null);
+    setOk(null);
+    try {
+      await api.delete(
+        `/admin/financial-institutions/${selectedFiId}/embossing-templates/${templateId}`,
+      );
+      setOk(`Deleted template`);
+      await load();
+    } catch (e) {
+      setErr(errorMsg(e));
+    }
+  };
+
+  return (
+    <div className="panel">
+      <h2 style={{ margin: 0 }}>Embossing Templates</h2>
+      <p className="small" style={{ marginTop: 8 }}>
+        Per-FI schema definitions describing how batch card-data files are
+        parsed.  Templates are encrypted at rest; batch uploads reference
+        a template so the parser knows the record layout.  Visa + Mastercard
+        can share a template when the underlying format is identical.
+      </p>
+
+      <label>Financial Institution</label>
+      <select
+        value={selectedFiId}
+        onChange={(e) => { setSelectedFiId(e.target.value); setOk(null); setErr(null); }}
+      >
+        {fis.length === 0 && <option value="">No FIs available — create one first</option>}
+        {fis.map((f) => (
+          <option key={f.id} value={f.id}>{f.name} ({f.slug})</option>
+        ))}
+      </select>
+
+      {ok && <p className="tag ok" style={{ marginTop: 12 }}>{ok}</p>}
+      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+
+      <h3 style={{ marginTop: 20 }}>Upload new template</h3>
+
+      <label>Name</label>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="InComm Standard v2"
+        disabled={uploading}
+      />
+
+      <label>Description (optional)</label>
+      <input
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        placeholder="Record layout for InComm's Q2 2026 cards"
+        disabled={uploading}
+      />
+
+      <label>Format type</label>
+      <select
+        value={formatType}
+        onChange={(e) => setFormatType(e.target.value)}
+        disabled={uploading}
+      >
+        <option value="episode_six">Episode Six</option>
+        <option value="fixed_width">Fixed-width</option>
+        <option value="csv">CSV</option>
+        <option value="xml">XML</option>
+      </select>
+
+      <label>Supported schemes</label>
+      <div style={{ display: 'flex', gap: 16, paddingTop: 4 }}>
+        <label className="small" style={{ display: 'flex', gap: 4 }}>
+          <input
+            type="checkbox"
+            checked={supportsVisa}
+            onChange={(e) => setSupportsVisa(e.target.checked)}
+            disabled={uploading}
+          />
+          Visa
+        </label>
+        <label className="small" style={{ display: 'flex', gap: 4 }}>
+          <input
+            type="checkbox"
+            checked={supportsMastercard}
+            onChange={(e) => setSupportsMastercard(e.target.checked)}
+            disabled={uploading}
+          />
+          Mastercard
+        </label>
+        <label className="small" style={{ display: 'flex', gap: 4 }}>
+          <input
+            type="checkbox"
+            checked={supportsAmex}
+            onChange={(e) => setSupportsAmex(e.target.checked)}
+            disabled={uploading}
+          />
+          Amex
+        </label>
+      </div>
+
+      <label style={{ marginTop: 12 }}>Template file (max 10 MB)</label>
+      <input
+        type="file"
+        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        disabled={uploading}
+      />
+
+      <div style={{ marginTop: 14 }}>
+        <button
+          className="btn primary"
+          onClick={handleUpload}
+          disabled={uploading || !file || !selectedFiId || !name.trim()}
+        >
+          {uploading ? 'Uploading…' : 'Upload template'}
+        </button>
+      </div>
+
+      <h3 style={{ marginTop: 20 }}>Templates</h3>
+      {loading ? (
+        <p className="small">Loading…</p>
+      ) : templates.length === 0 ? (
+        <p className="small">No templates yet for this FI.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Format</th>
+              <th>Schemes</th>
+              <th>Fields</th>
+              <th>Record len</th>
+              <th>File</th>
+              <th>Uploaded</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {templates.map((t) => (
+              <tr key={t.id}>
+                <td>
+                  {t.name}
+                  {t.description && <div className="small">{t.description}</div>}
+                </td>
+                <td className="mono">{t.formatType}</td>
+                <td>
+                  {t.supportsVisa && <span className="tag" style={{ marginRight: 4 }}>Visa</span>}
+                  {t.supportsMastercard && <span className="tag" style={{ marginRight: 4 }}>MC</span>}
+                  {t.supportsAmex && <span className="tag" style={{ marginRight: 4 }}>Amex</span>}
+                  {!t.supportsVisa && !t.supportsMastercard && !t.supportsAmex && (
+                    <span className="small">—</span>
+                  )}
+                </td>
+                <td className="mono">{t.fieldCount ?? '—'}</td>
+                <td className="mono">{t.recordLength ?? '—'}</td>
+                <td className="small">{t.templateFileName}</td>
+                <td className="small">{formatDate(t.createdAt)}</td>
+                <td>
+                  <button className="btn ghost" onClick={() => handleDelete(t.id)}>
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// --- Embossing Batches tab ---------------------------------------------------
+//
+// A batch IS an actual card-data file following a template.  The raw file is
+// encrypted at rest in S3 (SSE-KMS).  A background worker (separate PR) will
+// parse records and route each through the existing vault registerCard flow.
+// PANs never land in plaintext on this path — the batch file is the carrier
+// and the vault is the destination.
+
+interface EmbossingBatchRow {
+  id: string;
+  templateId: string;
+  programId: string;
+  fileName: string;
+  fileSize: number;
+  sha256: string;
+  s3Bucket: string;
+  s3Key: string;
+  status: string;
+  recordCount: number | null;
+  recordsSuccess: number;
+  recordsFailed: number;
+  processingError: string | null;
+  uploadedVia: string;
+  uploadedBy: string | null;
+  uploadedAt: string;
+  processedAt: string | null;
+  template: { id: string; name: string } | null;
+}
+
+function EmbossingBatchesTab() {
+  const [programs, setPrograms] = useState<Program[]>([]);
+  const [selectedProgramId, setSelectedProgramId] = useState<string>('');
+  const [templates, setTemplates] = useState<EmbossingTemplateRow[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const [batches, setBatches] = useState<EmbossingBatchRow[]>([]);
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  const selectedProgram = programs.find((p) => p.id === selectedProgramId) ?? null;
+
+  // Load programs once
+  useEffect(() => {
+    api.get<Program[]>('/programs')
+      .then((p) => {
+        setPrograms(p);
+        if (p.length > 0) setSelectedProgramId((prev) => prev || p[0].id);
+      })
+      .catch((e) => setErr(errorMsg(e)));
+  }, []);
+
+  // When program changes, refresh the template list (scoped to the program's FI)
+  // and default the template selection to the program's configured template.
+  useEffect(() => {
+    if (!selectedProgram?.financialInstitutionId) {
+      setTemplates([]);
+      setSelectedTemplateId('');
+      return;
+    }
+    api.get<EmbossingTemplateRow[]>(
+      `/admin/financial-institutions/${selectedProgram.financialInstitutionId}/embossing-templates`,
+    )
+      .then((list) => {
+        setTemplates(list);
+        setSelectedTemplateId(
+          selectedProgram.embossingTemplateId && list.some((t) => t.id === selectedProgram.embossingTemplateId)
+            ? selectedProgram.embossingTemplateId
+            : list[0]?.id ?? '',
+        );
+      })
+      .catch(() => {
+        setTemplates([]);
+        setSelectedTemplateId('');
+      });
+  }, [selectedProgram]);
+
+  const load = useCallback(async () => {
+    if (!selectedProgramId) {
+      setBatches([]);
+      return;
+    }
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await api.get<EmbossingBatchRow[]>(
+        `/admin/programs/${selectedProgramId}/embossing-batches`,
+      );
+      setBatches(r);
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedProgramId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleUpload = async () => {
+    if (!selectedProgramId || !file || !selectedTemplateId) return;
+    setErr(null);
+    setOk(null);
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('templateId', selectedTemplateId);
+      const token = getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers['authorization'] = `Bearer ${token}`;
+      const res = await fetch(
+        `/api/admin/programs/${selectedProgramId}/embossing-batches`,
+        { method: 'POST', headers, body: formData },
+      );
+      const raw = await res.text();
+      const respData = raw ? JSON.parse(raw) : undefined;
+      if (!res.ok) {
+        throw new Error(respData?.error?.message ?? `HTTP ${res.status}`);
+      }
+      setOk(`Uploaded batch ${respData.fileName} (${respData.id})`);
+      setFile(null);
+      await load();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="panel">
+      <h2 style={{ margin: 0 }}>Embossing Batches</h2>
+      <p className="small" style={{ marginTop: 8 }}>
+        Upload a card-data file for a program.  The raw file is encrypted
+        at rest (SSE-KMS in S3); a background worker parses records and
+        routes each through the vault's registerCard flow — PANs never land
+        in plaintext on this path.
+      </p>
+
+      <label>Program</label>
+      <select
+        value={selectedProgramId}
+        onChange={(e) => { setSelectedProgramId(e.target.value); setOk(null); setErr(null); }}
+      >
+        {programs.length === 0 && <option value="">No programs available</option>}
+        {programs.map((p) => (
+          <option key={p.id} value={p.id}>{p.name} ({p.currency})</option>
+        ))}
+      </select>
+
+      {selectedProgram && (
+        <p className="small" style={{ marginTop: 8 }}>
+          Configured template for this program:{' '}
+          {selectedProgram.embossingTemplate ? (
+            <span className="mono">{selectedProgram.embossingTemplate.name}</span>
+          ) : (
+            <span>none — set one on the program to default it here.</span>
+          )}
+        </p>
+      )}
+
+      {ok && <p className="tag ok" style={{ marginTop: 12 }}>{ok}</p>}
+      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+
+      <h3 style={{ marginTop: 20 }}>Upload new batch</h3>
+
+      <label>Template</label>
+      <select
+        value={selectedTemplateId}
+        onChange={(e) => setSelectedTemplateId(e.target.value)}
+        disabled={uploading}
+      >
+        {templates.length === 0 && <option value="">No templates for this FI</option>}
+        {templates.map((t) => (
+          <option key={t.id} value={t.id}>{t.name} ({t.formatType})</option>
+        ))}
+      </select>
+
+      <label>Batch file (max 500 MB)</label>
+      <input
+        type="file"
+        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        disabled={uploading}
+      />
+
+      <div style={{ marginTop: 14 }}>
+        <button
+          className="btn primary"
+          onClick={handleUpload}
+          disabled={uploading || !file || !selectedProgramId || !selectedTemplateId}
+        >
+          {uploading ? 'Uploading…' : 'Upload batch'}
+        </button>
+      </div>
+
+      <h3 style={{ marginTop: 20 }}>Batches</h3>
+      {loading ? (
+        <p className="small">Loading…</p>
+      ) : batches.length === 0 ? (
+        <p className="small">No batches yet for this program.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Size</th>
+              <th>Template</th>
+              <th>Status</th>
+              <th>Records</th>
+              <th>Via</th>
+              <th>Uploaded</th>
+            </tr>
+          </thead>
+          <tbody>
+            {batches.map((b) => (
+              <tr key={b.id}>
+                <td>
+                  <div>{b.fileName}</div>
+                  <div className="small mono">{b.sha256.slice(0, 16)}…</div>
+                </td>
+                <td className="mono">{formatBytes(b.fileSize)}</td>
+                <td className="small">{b.template?.name ?? '—'}</td>
+                <td>
+                  <span className={`tag ${batchStatusTone(b.status)}`}>{b.status}</span>
+                  {b.processingError && (
+                    <div className="tag err" style={{ marginTop: 4 }}>{b.processingError}</div>
+                  )}
+                </td>
+                <td className="mono small">
+                  {b.recordCount === null ? '—' : (
+                    <>
+                      {b.recordsSuccess}/{b.recordCount}
+                      {b.recordsFailed > 0 && ` (${b.recordsFailed} failed)`}
+                    </>
+                  )}
+                </td>
+                <td className="small">{b.uploadedVia}</td>
+                <td className="small">{formatDate(b.uploadedAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function batchStatusTone(s: string): 'ok' | 'err' | 'warn' | '' {
+  if (s === 'PROCESSED') return 'ok';
+  if (s === 'FAILED') return 'err';
+  if (s === 'PROCESSING' || s === 'RECEIVED') return 'warn';
+  return '';
 }
 
 // --- Helpers -----------------------------------------------------------------

@@ -17,6 +17,7 @@ export interface UpsertProgramInput {
   preActivationNdefUrlTemplate?: string | null;
   postActivationNdefUrlTemplate?: string | null;
   financialInstitutionId?: string | null;
+  embossingTemplateId?: string | null;
 }
 
 export async function createProgram(input: UpsertProgramInput): Promise<Program> {
@@ -37,6 +38,7 @@ export async function createProgram(input: UpsertProgramInput): Promise<Program>
         preActivationNdefUrlTemplate: input.preActivationNdefUrlTemplate ?? null,
         postActivationNdefUrlTemplate: input.postActivationNdefUrlTemplate ?? null,
         financialInstitutionId: input.financialInstitutionId ?? null,
+        embossingTemplateId: input.embossingTemplateId ?? null,
       },
     });
   } catch (err) {
@@ -72,6 +74,11 @@ export async function updateProgram(
       ? { connect: { id: patch.financialInstitutionId } }
       : { disconnect: true };
   }
+  if (patch.embossingTemplateId !== undefined) {
+    data.embossingTemplate = patch.embossingTemplateId
+      ? { connect: { id: patch.embossingTemplateId } }
+      : { disconnect: true };
+  }
 
   try {
     return await prisma.program.update({ where: { id }, data });
@@ -95,12 +102,19 @@ export async function listPrograms(opts: ListProgramsOptions = {}): Promise<Prog
     orderBy: { id: 'asc' },
     include: {
       financialInstitution: { select: { id: true, name: true, slug: true } },
+      embossingTemplate: { select: { id: true, name: true } },
     },
   });
 }
 
 export async function getProgram(id: string): Promise<Program> {
-  const p = await prisma.program.findUnique({ where: { id } });
+  const p = await prisma.program.findUnique({
+    where: { id },
+    include: {
+      financialInstitution: { select: { id: true, name: true, slug: true } },
+      embossingTemplate: { select: { id: true, name: true } },
+    },
+  });
   if (!p) throw notFound('program_not_found', `Program ${id} not found`);
   return p;
 }
