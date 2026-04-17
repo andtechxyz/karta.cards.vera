@@ -253,7 +253,7 @@ export default function Admin() {
   return (
     <div className="page">
       <div className="row" style={{ alignItems: 'center' }}>
-        <h1 style={{ margin: 0 }}>Vera Admin</h1>
+        <h1 style={{ margin: 0 }}>karta.cards Admin</h1>
         <button
           className="btn ghost"
           onClick={() => {
