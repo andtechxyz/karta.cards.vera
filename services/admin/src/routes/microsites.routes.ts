@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { S3Client, PutObjectCommand, DeleteObjectsCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, CopyObjectCommand } from '@aws-sdk/client-s3';
 import AdmZip from 'adm-zip';
 import { prisma } from '@vera/db';
 import { badRequest, notFound } from '@vera/core';
@@ -140,6 +140,40 @@ router.post('/programs/:programId/microsites/:versionId/activate', async (req, r
   const { programId, versionId } = req.params;
   const mv = await prisma.micrositeVersion.findFirst({ where: { id: versionId, programId } });
   if (!mv) throw notFound('version_not_found', `Microsite version ${versionId} not found`);
+
+  const config = getAdminConfig();
+  const bucket = config.MICROSITE_BUCKET;
+  const currentPrefix = `programs/${programId}/current/`;
+
+  // Clear the existing current/ prefix
+  const existing = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: currentPrefix }));
+  if (existing.Contents && existing.Contents.length > 0) {
+    await s3.send(new DeleteObjectsCommand({
+      Bucket: bucket,
+      Delete: { Objects: existing.Contents.map(o => ({ Key: o.Key! })) },
+    }));
+  }
+
+  // Copy from versioned prefix to current/ so CloudFront serves the active
+  // version directly at microsite.karta.cards/programs/<id>/... without needing
+  // a CloudFront Function or KVS lookup.
+  let continuationToken: string | undefined;
+  do {
+    const listResp = await s3.send(new ListObjectsV2Command({
+      Bucket: bucket, Prefix: mv.s3Prefix, ContinuationToken: continuationToken,
+    }));
+    for (const obj of listResp.Contents ?? []) {
+      if (!obj.Key) continue;
+      const relKey = obj.Key.slice(mv.s3Prefix.length);
+      await s3.send(new CopyObjectCommand({
+        Bucket: bucket,
+        CopySource: `${bucket}/${encodeURIComponent(obj.Key)}`,
+        Key: `${currentPrefix}${relKey}`,
+        MetadataDirective: 'COPY',
+      }));
+    }
+    continuationToken = listResp.IsTruncated ? listResp.NextContinuationToken : undefined;
+  } while (continuationToken);
 
   await prisma.program.update({
     where: { id: programId },
