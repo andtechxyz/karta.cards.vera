@@ -27,6 +27,7 @@ const upsertBaseSchema = z.object({
   tierRules: tierRuleSetSchema,
   preActivationNdefUrlTemplate: z.string().url().nullable().optional(),
   postActivationNdefUrlTemplate: z.string().url().nullable().optional(),
+  financialInstitutionId: z.string().optional(),
 });
 
 const createSchema = upsertBaseSchema.extend({
@@ -53,8 +54,11 @@ router.patch('/:id', validateBody(patchSchema), async (req, res) => {
   res.json(program);
 });
 
-router.get('/', async (_req, res) => {
-  res.json(await listPrograms());
+router.get('/', async (req, res) => {
+  const financialInstitutionId = typeof req.query.financialInstitutionId === 'string'
+    ? req.query.financialInstitutionId
+    : undefined;
+  res.json(await listPrograms({ financialInstitutionId }));
 });
 
 // Static sub-routes before :id to prevent shadowing.

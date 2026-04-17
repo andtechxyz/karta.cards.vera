@@ -16,6 +16,7 @@ export interface UpsertProgramInput {
   tierRules: unknown; // Zod-validated inside
   preActivationNdefUrlTemplate?: string | null;
   postActivationNdefUrlTemplate?: string | null;
+  financialInstitutionId?: string | null;
 }
 
 export async function createProgram(input: UpsertProgramInput): Promise<Program> {
@@ -35,6 +36,7 @@ export async function createProgram(input: UpsertProgramInput): Promise<Program>
         tierRules: rules,
         preActivationNdefUrlTemplate: input.preActivationNdefUrlTemplate ?? null,
         postActivationNdefUrlTemplate: input.postActivationNdefUrlTemplate ?? null,
+        financialInstitutionId: input.financialInstitutionId ?? null,
       },
     });
   } catch (err) {
@@ -65,6 +67,11 @@ export async function updateProgram(
     }
     data.postActivationNdefUrlTemplate = patch.postActivationNdefUrlTemplate;
   }
+  if (patch.financialInstitutionId !== undefined) {
+    data.financialInstitution = patch.financialInstitutionId
+      ? { connect: { id: patch.financialInstitutionId } }
+      : { disconnect: true };
+  }
 
   try {
     return await prisma.program.update({ where: { id }, data });
@@ -76,8 +83,20 @@ export async function updateProgram(
   }
 }
 
-export async function listPrograms(): Promise<Program[]> {
-  return prisma.program.findMany({ orderBy: { id: 'asc' } });
+export interface ListProgramsOptions {
+  financialInstitutionId?: string;
+}
+
+export async function listPrograms(opts: ListProgramsOptions = {}): Promise<Program[]> {
+  return prisma.program.findMany({
+    where: opts.financialInstitutionId
+      ? { financialInstitutionId: opts.financialInstitutionId }
+      : undefined,
+    orderBy: { id: 'asc' },
+    include: {
+      financialInstitution: { select: { id: true, name: true, slug: true } },
+    },
+  });
 }
 
 export async function getProgram(id: string): Promise<Program> {

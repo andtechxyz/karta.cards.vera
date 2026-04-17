@@ -22,7 +22,7 @@ export {
   resolveNdefUrlsForCard,
   updateProgram,
 } from './program.service.js';
-export type { UpsertProgramInput } from './program.service.js';
+export type { UpsertProgramInput, ListProgramsOptions } from './program.service.js';
 
 export { renderNdefUrls, validateNdefUrlTemplate } from './ndef.js';
 export type { NdefUrlPair } from './ndef.js';

@@ -14,7 +14,7 @@ import { CREDENTIAL_KINDS, type CredentialKind } from '../utils/webauthn';
 // SDM URL fires → /activate?session=<token>.  Admin sees the resulting
 // state but cannot mint sessions or links itself.
 
-type TabKey = 'cards' | 'vault' | 'programs' | 'transactions' | 'audit' | 'chipProfiles' | 'keyMgmt' | 'batches' | 'provMonitor' | 'microsites';
+type TabKey = 'financialInstitutions' | 'cards' | 'vault' | 'programs' | 'transactions' | 'audit' | 'chipProfiles' | 'keyMgmt' | 'batches' | 'provMonitor' | 'microsites';
 
 interface ActivationSessionRow {
   id: string;
@@ -266,7 +266,7 @@ export default function Admin() {
       </div>
       <p className="small">Cards, vault, WebAuthn credentials, transactions, audit.</p>
       <div className="tabs">
-        {(['cards', 'vault', 'programs', 'transactions', 'audit', 'chipProfiles', 'keyMgmt', 'batches', 'provMonitor', 'microsites'] as const).map((t) => (
+        {(['financialInstitutions', 'cards', 'vault', 'programs', 'transactions', 'audit', 'chipProfiles', 'keyMgmt', 'batches', 'provMonitor', 'microsites'] as const).map((t) => (
           <button
             key={t}
             className={`tab ${tab === t ? 'active' : ''}`}
@@ -276,6 +276,7 @@ export default function Admin() {
           </button>
         ))}
       </div>
+      {tab === 'financialInstitutions' && <FinancialInstitutionsTab />}
       {tab === 'cards' && <CardsTab />}
       {tab === 'vault' && <VaultTab />}
       {tab === 'programs' && <ProgramsTab />}
@@ -291,6 +292,7 @@ export default function Admin() {
 }
 
 const labels: Record<TabKey, string> = {
+  financialInstitutions: 'Financial Institutions',
   cards: 'Cards',
   vault: 'Vault',
   programs: 'Programs',
@@ -567,6 +569,219 @@ function VaultTab() {
   );
 }
 
+// --- Financial Institutions tab ----------------------------------------------
+//
+// FIs are the BIN sponsor / card issuer (e.g. "InComm") and the top-level
+// scoping entity.  Programs (and therefore cards) belong to an FI.
+
+function FinancialInstitutionsTab() {
+  const [fis, setFis] = useState<FinancialInstitution[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState<FinancialInstitution | 'new' | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      setFis(await api.get<FinancialInstitution[]>('/admin/financial-institutions'));
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (editing !== null) {
+    return (
+      <FinancialInstitutionForm
+        fi={editing === 'new' ? null : editing}
+        onSaved={async () => {
+          setEditing(null);
+          await load();
+        }}
+        onCancel={() => setEditing(null)}
+      />
+    );
+  }
+
+  return (
+    <div className="panel">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Financial Institutions</h2>
+        <button className="btn primary" onClick={() => setEditing('new')}>
+          New FI
+        </button>
+      </div>
+      <p className="small" style={{ marginTop: 8 }}>
+        Top-level issuer / BIN sponsor.  Programs belong to an FI (e.g. InComm → SecureGift).
+      </p>
+      {err && <p className="tag err" style={{ marginTop: 8 }}>{err}</p>}
+      {loading ? (
+        <p className="small">Loading…</p>
+      ) : fis.length === 0 ? (
+        <p className="small">No financial institutions yet. Create one to start grouping programs.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Slug</th>
+              <th>BIN</th>
+              <th>Status</th>
+              <th># Programs</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {fis.map((f) => (
+              <tr key={f.id}>
+                <td>{f.name}</td>
+                <td className="mono">{f.slug}</td>
+                <td className="mono">{f.bin ?? <span className="small">—</span>}</td>
+                <td>
+                  <span className={`tag ${f.status === 'ACTIVE' ? 'ok' : ''}`}>{f.status}</span>
+                </td>
+                <td className="mono">{f._count?.programs ?? 0}</td>
+                <td className="small">{formatDate(f.createdAt)}</td>
+                <td>
+                  <button className="btn ghost" onClick={() => setEditing(f)}>
+                    Edit
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function FinancialInstitutionForm({
+  fi,
+  onSaved,
+  onCancel,
+}: {
+  fi: FinancialInstitution | null;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(fi?.name ?? '');
+  const [slug, setSlug] = useState(fi?.slug ?? '');
+  const [slugTouched, setSlugTouched] = useState(Boolean(fi));
+  const [bin, setBin] = useState(fi?.bin ?? '');
+  const [contactEmail, setContactEmail] = useState(fi?.contactEmail ?? '');
+  const [contactName, setContactName] = useState(fi?.contactName ?? '');
+  const [status, setStatus] = useState<'ACTIVE' | 'SUSPENDED'>(fi?.status ?? 'ACTIVE');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const onNameChange = (v: string) => {
+    setName(v);
+    if (!slugTouched) setSlug(slugify(v));
+  };
+
+  const save = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      if (fi) {
+        const body: Record<string, unknown> = {
+          name,
+          slug,
+          status,
+        };
+        if (bin.trim()) body.bin = bin.trim();
+        if (contactEmail.trim()) body.contactEmail = contactEmail.trim();
+        if (contactName.trim()) body.contactName = contactName.trim();
+        await api.patch<FinancialInstitution>(`/admin/financial-institutions/${fi.id}`, body);
+      } else {
+        const body: Record<string, unknown> = { name, slug };
+        if (bin.trim()) body.bin = bin.trim();
+        if (contactEmail.trim()) body.contactEmail = contactEmail.trim();
+        if (contactName.trim()) body.contactName = contactName.trim();
+        await api.post<FinancialInstitution>('/admin/financial-institutions', body);
+      }
+      onSaved();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel">
+      <div className="row">
+        <h2 style={{ margin: 0 }}>{fi ? `Edit ${fi.name}` : 'New Financial Institution'}</h2>
+        <button className="btn ghost" onClick={onCancel}>Cancel</button>
+      </div>
+
+      <label>Name</label>
+      <input value={name} onChange={(e) => onNameChange(e.target.value)} placeholder="InComm" />
+
+      <label>Slug</label>
+      <input
+        value={slug}
+        onChange={(e) => { setSlug(e.target.value); setSlugTouched(true); }}
+        className="mono"
+        placeholder="incomm"
+      />
+      <p className="small">Lowercase letters, digits, and hyphens only.  Auto-suggested from name.</p>
+
+      <label>BIN (optional)</label>
+      <input
+        value={bin}
+        onChange={(e) => setBin(e.target.value)}
+        className="mono"
+        placeholder="491234"
+        maxLength={8}
+      />
+
+      <label>Contact email (optional)</label>
+      <input
+        type="email"
+        value={contactEmail}
+        onChange={(e) => setContactEmail(e.target.value)}
+        placeholder="ops@incomm.com"
+      />
+
+      <label>Contact name (optional)</label>
+      <input
+        value={contactName}
+        onChange={(e) => setContactName(e.target.value)}
+        placeholder="Jane Doe"
+      />
+
+      {fi && (
+        <>
+          <label>Status</label>
+          <select value={status} onChange={(e) => setStatus(e.target.value as 'ACTIVE' | 'SUSPENDED')}>
+            <option value="ACTIVE">ACTIVE</option>
+            <option value="SUSPENDED">SUSPENDED</option>
+          </select>
+        </>
+      )}
+
+      <div style={{ marginTop: 16 }}>
+        <button
+          className="btn primary"
+          onClick={save}
+          disabled={busy || !name || !slug}
+        >
+          {busy ? 'Saving…' : fi ? 'Save changes' : 'Create FI'}
+        </button>
+      </div>
+      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+    </div>
+  );
+}
+
 // --- Programs tab ------------------------------------------------------------
 
 // Shape mirrors the server's Program prisma model + tierRuleSchema
@@ -586,12 +801,33 @@ interface Program {
   tierRules: TierRule[];
   preActivationNdefUrlTemplate: string | null;
   postActivationNdefUrlTemplate: string | null;
+  financialInstitutionId: string | null;
+  financialInstitution?: { id: string; name: string; slug: string } | null;
   createdAt: string;
   updatedAt: string;
 }
 
+interface FinancialInstitution {
+  id: string;
+  name: string;
+  slug: string;
+  bin: string | null;
+  contactEmail: string | null;
+  contactName: string | null;
+  status: 'ACTIVE' | 'SUSPENDED';
+  createdAt: string;
+  updatedAt: string;
+  _count?: { programs: number };
+  programs?: Program[];
+}
+
+const slugify = (s: string) =>
+  s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 42);
+
 function ProgramsTab() {
   const [programs, setPrograms] = useState<Program[]>([]);
+  const [fis, setFis] = useState<FinancialInstitution[]>([]);
+  const [filterFiId, setFilterFiId] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<Program | 'new' | null>(null);
@@ -599,13 +835,19 @@ function ProgramsTab() {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      setPrograms(await api.get<Program[]>('/programs'));
+      const qs = filterFiId ? `?financialInstitutionId=${encodeURIComponent(filterFiId)}` : '';
+      const [pr, fiList] = await Promise.all([
+        api.get<Program[]>(`/programs${qs}`),
+        api.get<FinancialInstitution[]>('/admin/financial-institutions'),
+      ]);
+      setPrograms(pr);
+      setFis(fiList);
     } catch (e) {
       setErr(errorMsg(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filterFiId]);
 
   useEffect(() => {
     load();
@@ -615,6 +857,7 @@ function ProgramsTab() {
     return (
       <ProgramForm
         program={editing === 'new' ? null : editing}
+        fis={fis}
         onSaved={async () => {
           setEditing(null);
           await load();
@@ -628,7 +871,12 @@ function ProgramsTab() {
     <div className="panel">
       <div className="row">
         <h2 style={{ margin: 0 }}>Programs</h2>
-        <button className="btn primary" onClick={() => setEditing('new')}>
+        <button
+          className="btn primary"
+          onClick={() => setEditing('new')}
+          disabled={fis.length === 0}
+          title={fis.length === 0 ? 'Create a Financial Institution first' : 'New program'}
+        >
           New program
         </button>
       </div>
@@ -638,6 +886,17 @@ function ProgramsTab() {
         card) and after Vera confirms activation (post-activation URL written
         via authenticated APDU).
       </p>
+      <div className="row" style={{ marginTop: 8 }}>
+        <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          Filter by institution:
+          <select value={filterFiId} onChange={(e) => setFilterFiId(e.target.value)}>
+            <option value="">All institutions</option>
+            {fis.map((f) => (
+              <option key={f.id} value={f.id}>{f.name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
       {err && <p className="tag err" style={{ marginTop: 8 }}>{err}</p>}
       {loading ? (
         <p className="small">Loading…</p>
@@ -651,6 +910,7 @@ function ProgramsTab() {
           <thead>
             <tr>
               <th>ID</th>
+              <th>Institution</th>
               <th>Name</th>
               <th>Currency</th>
               <th>Rules</th>
@@ -663,6 +923,7 @@ function ProgramsTab() {
             {programs.map((p) => (
               <tr key={p.id}>
                 <td className="mono">{p.id}</td>
+                <td>{p.financialInstitution?.name ?? <span className="small">—</span>}</td>
                 <td>{p.name}</td>
                 <td className="mono">{p.currency}</td>
                 <td className="small">{p.tierRules.length} rule{p.tierRules.length === 1 ? '' : 's'}</td>
@@ -699,16 +960,21 @@ function cloneRules(rules: readonly TierRule[]): TierRule[] {
 
 function ProgramForm({
   program,
+  fis,
   onSaved,
   onCancel,
 }: {
   program: Program | null;
+  fis: FinancialInstitution[];
   onSaved: () => void;
   onCancel: () => void;
 }) {
   const [id, setId] = useState(program?.id ?? '');
   const [name, setName] = useState(program?.name ?? '');
   const [currency, setCurrency] = useState(program?.currency ?? 'AUD');
+  const [financialInstitutionId, setFinancialInstitutionId] = useState<string>(
+    program?.financialInstitutionId ?? fis[0]?.id ?? '',
+  );
   const [rules, setRules] = useState<TierRule[]>(() =>
     cloneRules(program?.tierRules ?? NEW_PROGRAM_DEFAULT_RULES),
   );
@@ -727,6 +993,7 @@ function ProgramForm({
         tierRules: rules,
         preActivationNdefUrlTemplate: pre.trim() ? pre.trim() : null,
         postActivationNdefUrlTemplate: post.trim() ? post.trim() : null,
+        financialInstitutionId: financialInstitutionId || undefined,
       };
       if (program) {
         await api.patch<Program>(`/programs/${program.id}`, body);
@@ -760,6 +1027,17 @@ function ProgramForm({
           <p className="small">Palisade's programId — alphanumeric + _ - only; immutable after create.</p>
         </>
       )}
+
+      <label>Financial Institution</label>
+      <select
+        value={financialInstitutionId}
+        onChange={(e) => setFinancialInstitutionId(e.target.value)}
+      >
+        {fis.length === 0 && <option value="">(none available — create an FI first)</option>}
+        {fis.map((f) => (
+          <option key={f.id} value={f.id}>{f.name} ({f.slug})</option>
+        ))}
+      </select>
 
       <label>Name</label>
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Mastercard Platinum" />
@@ -809,7 +1087,7 @@ function ProgramForm({
         <button
           className="btn primary"
           onClick={save}
-          disabled={busy || (!program && !id) || !name || !currency}
+          disabled={busy || (!program && !id) || !name || !currency || !financialInstitutionId}
         >
           {busy ? 'Saving…' : program ? 'Save changes' : 'Create program'}
         </button>

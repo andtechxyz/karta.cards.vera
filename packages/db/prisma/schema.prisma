@@ -42,6 +42,31 @@ datasource db {
 }
 
 // ---------------------------------------------------------------------------
+// Financial Institutions
+// ---------------------------------------------------------------------------
+//
+// An FI is the BIN sponsor / card issuer (e.g. "InComm").  Programs hang
+// off an FI — one FI can run many programs (e.g. InComm → SecureGift,
+// InComm → GiftPlus).  Cards belong to programs; programs belong to FIs.
+// Used for data scoping / multi-tenant isolation in the admin UI.
+model FinancialInstitution {
+  id           String  @id @default(cuid())
+  name         String
+  slug         String  @unique // URL-safe slug (e.g. "incomm")
+  bin          String? // optional BIN assigned to this FI
+  contactEmail String?
+  contactName  String?
+  status       String  @default("ACTIVE") // ACTIVE | SUSPENDED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  programs Program[]
+
+  @@index([slug])
+}
+
+// ---------------------------------------------------------------------------
 // Programs
 // ---------------------------------------------------------------------------
 //
@@ -93,6 +118,11 @@ model Program {
   // active MicrositeVersion.  See MicrositeVersion for the versioning model.
   micrositeEnabled       Boolean @default(false)
   micrositeActiveVersion String? // current active MicrositeVersion.id
+
+  // Financial institution that owns this program.
+  // Nullable during migration; will be required after backfill.
+  financialInstitutionId String?
+  financialInstitution   FinancialInstitution? @relation(fields: [financialInstitutionId], references: [id], onDelete: Restrict)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -637,7 +667,7 @@ model ProvisioningSession {
 // rollback is a one-click operation.
 
 model MicrositeVersion {
-  id      String  @id @default(cuid())
+  id        String  @id @default(cuid())
   programId String
   program   Program @relation(fields: [programId], references: [id])
 
