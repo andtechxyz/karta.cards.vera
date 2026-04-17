@@ -14,6 +14,11 @@ const { get: getAdminConfig, reset: _resetAdminConfig } = defineEnv({
   SERVICE_AUTH_ADMIN_SECRET: hexKey(32),
   // Activation leg — batch CSV ingestion calls activation's /api/cards/register.
   ACTIVATION_SERVICE_URL: z.string().url().default('http://localhost:3002'),
+  // Pay leg — admin UI proxies transaction list/detail from pay service.
+  PAY_SERVICE_URL: z.string().url().default('http://localhost:3003'),
+  // Admin key for calling pay service's admin-gated endpoints (transactions).
+  // Still required by pay service for M2M calls.
+  PAY_ADMIN_API_KEY: hexKey(32),
   // Cognito — browser-facing auth.  MFA enforced at the pool level;
   // 'admin' group membership gates access at the middleware level.
   COGNITO_USER_POOL_ID: z.string().default('ap-southeast-2_Db4d1vpIV'),

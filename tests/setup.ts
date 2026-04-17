@@ -54,6 +54,9 @@ const defaults: Record<string, string> = {
   // Admin browser-facing auth — must differ from PROVISION_AUTH_KEYS to catch
   // accidental key-swap bugs.
   ADMIN_API_KEY: HEX32_J,
+  // Admin proxy to pay service (admin UI's transaction tab)
+  PAY_SERVICE_URL: 'http://localhost:3003',
+  PAY_ADMIN_API_KEY: HEX32_J,
   // CORS — all test origins.
   CORS_ORIGINS: 'https://pay.karta.cards,https://activation.karta.cards,https://manage.karta.cards',
 };
