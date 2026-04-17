@@ -27,10 +27,12 @@ interface ActivationSessionRow {
 interface Card {
   id: string;
   cardRef: string;
-  status: 'BLANK' | 'PERSONALISED' | 'ACTIVATED' | 'SUSPENDED' | 'REVOKED';
+  status: 'BLANK' | 'PERSONALISED' | 'ACTIVATED' | 'PROVISIONED' | 'SUSPENDED' | 'REVOKED';
+  retailSaleStatus: 'SHIPPED' | 'SOLD' | null;
+  retailSoldAt: string | null;
   chipSerial: string | null;
   programId: string | null;
-  program: { id: string; name: string; currency: string } | null;
+  program: { id: string; name: string; currency: string; programType?: string } | null;
   batchId: string | null;
   createdAt: string;
   vaultEntry?: { id: string; panLast4: string; panBin: string; cardholderName: string } | null;
@@ -342,6 +344,7 @@ function CardsTab() {
             <tr>
               <th>Card ref</th>
               <th>Status</th>
+              <th>Retail sale</th>
               <th>Vault</th>
               <th>Program</th>
               <th>Activation</th>
@@ -357,6 +360,9 @@ function CardsTab() {
                   <span className={`tag ${c.status === 'ACTIVATED' ? 'ok' : ''}`}>
                     {c.status}
                   </span>
+                </td>
+                <td>
+                  <RetailSaleCell card={c} onChanged={reload} />
                 </td>
                 <td>
                   {c.vaultEntry ? (
@@ -437,6 +443,69 @@ function ProgramCell({
           </option>
         ))}
       </select>
+      {err && <div className="tag err" style={{ marginTop: 4 }}>{err}</div>}
+    </div>
+  );
+}
+
+/**
+ * Per-row cell for retail sale status.  RETAIL programs can be marked SOLD
+ * from here (a one-click transition that flips the card out of its
+ * microsite-only state and into the regular activation flow).  Non-retail
+ * cards render an em-dash because the column doesn't apply to them.
+ */
+function RetailSaleCell({
+  card,
+  onChanged,
+}: {
+  card: Card;
+  onChanged: () => Promise<void> | void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const isRetail = card.program?.programType === 'RETAIL';
+
+  if (!isRetail) return <span className="small">—</span>;
+
+  const markSold = async () => {
+    if (!confirm(`Mark ${card.cardRef} as SOLD?  The next tap will start activation.`)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.post<unknown>(`/cards/${card.cardRef}/mark-sold`, {});
+      await onChanged();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (card.retailSaleStatus === 'SOLD') {
+    return (
+      <div>
+        <span className="tag ok">SOLD</span>
+        {card.retailSoldAt && (
+          <div className="small" style={{ marginTop: 2 }}>{formatDate(card.retailSoldAt)}</div>
+        )}
+      </div>
+    );
+  }
+
+  // Null or SHIPPED — offer the mark-sold action.  Null can happen for
+  // retail cards registered before the programType field was set, so
+  // treat it the same as SHIPPED for UI purposes.
+  return (
+    <div>
+      <span className="tag">{card.retailSaleStatus ?? 'SHIPPED'}</span>
+      <button
+        className="btn ghost"
+        style={{ marginLeft: 6, padding: '2px 8px', fontSize: 12 }}
+        onClick={markSold}
+        disabled={busy}
+      >
+        {busy ? '…' : 'Mark sold'}
+      </button>
       {err && <div className="tag err" style={{ marginTop: 4 }}>{err}</div>}
     </div>
   );
@@ -782,6 +851,397 @@ function FinancialInstitutionForm({
         </button>
       </div>
       {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+
+      {fi && <PartnerCredentialsSection fiId={fi.id} />}
+      {fi && <SftpAccessSection fiSlug={fi.slug} />}
+    </div>
+  );
+}
+
+// --- SFTP Access (per-FI) ----------------------------------------------------
+//
+// Read-only reference panel for the FI's SFTP endpoint.  v1 provisions
+// accounts via the vera/SFTP_USERS Secrets Manager secret — no CRUD in
+// the UI yet.  Ops mints a key pair for the partner, pastes the public
+// key into SFTP_USERS, and restarts the vera-sftp service.  This panel
+// shows the partner-facing connection details so support can hand them
+// to the integrator without going digging.
+function SftpAccessSection({ fiSlug }: { fiSlug: string }) {
+  const host = 'sftp.karta.cards';
+  return (
+    <div style={{ marginTop: 24, padding: 16, border: '1px solid #d3d3d3', borderRadius: 6, background: '#fafafa' }}>
+      <h3 style={{ marginTop: 0 }}>SFTP access</h3>
+      <p className="small" style={{ marginTop: 0 }}>
+        Alternative to the HTTP Partner API.  Partners drop batches into their
+        home directory; the ingester picks them up every 30 seconds and creates
+        a RECEIVED EmbossingBatch.
+      </p>
+      <table className="kv" style={{ marginBottom: 8 }}>
+        <tbody>
+          <tr><th>Host</th><td><code>{host}</code></td></tr>
+          <tr><th>Port</th><td><code>22</code></td></tr>
+          <tr><th>Username</th><td><code>{fiSlug}</code></td></tr>
+          <tr><th>Auth</th><td>SSH public key (ed25519 or RSA-4096)</td></tr>
+          <tr>
+            <th>Upload path</th>
+            <td><code>/upload/&lt;programId&gt;/&lt;templateId&gt;/&lt;filename&gt;</code></td>
+          </tr>
+        </tbody>
+      </table>
+      <p className="small" style={{ marginTop: 8 }}>
+        To onboard a partner: receive their SSH public key, append it to the{' '}
+        <code>vera/SFTP_USERS</code> secret with username=<code>{fiSlug}</code>,
+        and restart <code>vera-sftp</code>.  Processed files move to{' '}
+        <code>/processed/&lt;date&gt;/</code>; rejects to{' '}
+        <code>/failed/&lt;date&gt;/</code> with a <code>.err</code> file.
+      </p>
+    </div>
+  );
+}
+
+// --- Partner Credentials (per-FI) -------------------------------------------
+//
+// Lives inside FinancialInstitutionForm when editing an existing FI.  Lists
+// existing credentials, lets admins mint new ones (secret shown ONCE), and
+// revoke active ones.  The backend surfaces `secretHash` + `salt` in the
+// creation response so partners have everything they need to sign HMACs
+// without extra handshakes.
+
+interface PartnerCredentialRow {
+  id: string;
+  keyId: string;
+  description: string | null;
+  status: 'ACTIVE' | 'REVOKED';
+  lastUsedAt: string | null;
+  lastUsedIp: string | null;
+  revokedAt: string | null;
+  revokedReason: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+interface NewCredentialResult {
+  id: string;
+  keyId: string;
+  secret: string;
+  secretHash: string;
+  salt: string;
+}
+
+function PartnerCredentialsSection({ fiId }: { fiId: string }) {
+  const [rows, setRows] = useState<PartnerCredentialRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [newDescription, setNewDescription] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [fresh, setFresh] = useState<NewCredentialResult | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await api.get<PartnerCredentialRow[]>(
+        `/admin/financial-institutions/${fiId}/credentials`,
+      );
+      setRows(r);
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [fiId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const submitCreate = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const body: Record<string, unknown> = {};
+      if (newDescription.trim()) body.description = newDescription.trim();
+      const result = await api.post<NewCredentialResult>(
+        `/admin/financial-institutions/${fiId}/credentials`,
+        body,
+      );
+      setFresh(result);
+      setCreating(false);
+      setNewDescription('');
+      await load();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (row: PartnerCredentialRow) => {
+    const reason = window.prompt(
+      `Revoke credential "${row.keyId}"?  Reason (optional):`,
+      '',
+    );
+    // Null ⇒ Cancel.  Empty string ⇒ OK with no reason — we still revoke.
+    if (reason === null) return;
+    setErr(null);
+    try {
+      const body: Record<string, unknown> = {};
+      if (reason.trim()) body.reason = reason.trim();
+      await api.post(
+        `/admin/financial-institutions/${fiId}/credentials/${row.id}/revoke`,
+        body,
+      );
+      await load();
+    } catch (e) {
+      setErr(errorMsg(e));
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 32, paddingTop: 20, borderTop: '1px solid var(--edge)' }}>
+      <div className="row">
+        <h3 style={{ margin: 0 }}>Partner Credentials</h3>
+        {!creating && !fresh && (
+          <button className="btn primary" onClick={() => setCreating(true)}>
+            Generate Credential
+          </button>
+        )}
+      </div>
+      <p className="small" style={{ marginTop: 8 }}>
+        API credentials partners use to upload embossing batches via HTTP
+        (HMAC-SHA256).  Secrets are shown ONCE at creation — store them
+        securely.
+      </p>
+
+      {err && <p className="tag err" style={{ marginTop: 8 }}>{err}</p>}
+
+      {fresh && <FreshCredentialPanel result={fresh} onClose={() => setFresh(null)} />}
+
+      {creating && (
+        <div className="panel panel-2" style={{ marginTop: 12 }}>
+          <label>Description (optional)</label>
+          <input
+            value={newDescription}
+            onChange={(e) => setNewDescription(e.target.value)}
+            placeholder="InComm production upload pipeline"
+            disabled={busy}
+          />
+          <div className="btn-row" style={{ marginTop: 12 }}>
+            <button className="btn primary" onClick={submitCreate} disabled={busy}>
+              {busy ? 'Generating…' : 'Generate'}
+            </button>
+            <button
+              className="btn ghost"
+              onClick={() => { setCreating(false); setNewDescription(''); }}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <p className="small" style={{ marginTop: 12 }}>Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="small" style={{ marginTop: 12 }}>
+          No credentials yet.  Generate one to let a partner upload batches.
+        </p>
+      ) : (
+        <table style={{ marginTop: 12 }}>
+          <thead>
+            <tr>
+              <th>Key ID</th>
+              <th>Description</th>
+              <th>Status</th>
+              <th>Last Used</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td className="mono">{r.keyId}</td>
+                <td className="small">{r.description ?? <span className="small">—</span>}</td>
+                <td>
+                  <span className={`tag ${r.status === 'ACTIVE' ? 'ok' : 'err'}`}>
+                    {r.status}
+                  </span>
+                  {r.status === 'REVOKED' && r.revokedReason && (
+                    <div className="small" style={{ marginTop: 2 }}>{r.revokedReason}</div>
+                  )}
+                </td>
+                <td className="small">
+                  {r.lastUsedAt ? (
+                    <>
+                      {formatDate(r.lastUsedAt)}
+                      {r.lastUsedIp && <div className="small mono">{r.lastUsedIp}</div>}
+                    </>
+                  ) : (
+                    <span className="small">never</span>
+                  )}
+                </td>
+                <td className="small">{formatDate(r.createdAt)}</td>
+                <td>
+                  {r.status === 'ACTIVE' && (
+                    <button className="btn ghost" onClick={() => revoke(r)}>
+                      Revoke
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Shown once" panel displayed after a new credential is minted.  Bright
+ * warning treatment (amber) because this is the only time the partner (and
+ * the admin relaying it) will ever see the plaintext secret.  Includes
+ * copy-buttons for every sensitive field plus a collapsible helper that
+ * documents the HMAC signing scheme for partners.
+ */
+function FreshCredentialPanel({
+  result,
+  onClose,
+}: {
+  result: NewCredentialResult;
+  onClose: () => void;
+}) {
+  const style = {
+    marginTop: 12,
+    padding: 16,
+    background: 'rgba(255, 191, 107, 0.08)',
+    border: '1px solid var(--warn)',
+    borderRadius: 'var(--radius)',
+  } as const;
+  return (
+    <div style={style}>
+      <h4 style={{ margin: 0, color: 'var(--warn)' }}>
+        Credential created — store these values now
+      </h4>
+      <p className="small" style={{ marginTop: 6 }}>
+        The secret below will NEVER be shown again.  Copy every field into your
+        partner's secret manager before closing this panel.
+      </p>
+
+      <CopyableField label="Key ID" value={result.keyId} />
+      <CopyableField label="Secret (plaintext — shown once)" value={result.secret} sensitive />
+      <CopyableField label="Secret Hash (HMAC key — hex)" value={result.secretHash} sensitive />
+      <CopyableField label="Salt (hex)" value={result.salt} />
+
+      <details style={{ marginTop: 14 }}>
+        <summary className="small" style={{ cursor: 'pointer', color: 'var(--accent)' }}>
+          How to sign a partner request (HMAC-SHA256)
+        </summary>
+        <div style={{ marginTop: 10 }}>
+          <p className="small" style={{ marginTop: 0 }}>
+            Canonical string to sign (exact newline separators, no trailing
+            newline):
+          </p>
+          <pre className="mono" style={preStyle}>
+{`METHOD\\nPATH\\nTIMESTAMP\\nSHA256(body)`}
+          </pre>
+          <p className="small">
+            The HMAC key is the hex-decoded <strong>Secret Hash</strong> above
+            (not the plaintext secret).  Replay window: ±60 seconds.
+          </p>
+          <p className="small">Required headers:</p>
+          <ul className="small" style={{ marginTop: 4 }}>
+            <li><span className="mono">X-Partner-KeyId</span></li>
+            <li><span className="mono">X-Partner-Signature</span> (hex)</li>
+            <li><span className="mono">X-Partner-Timestamp</span> (unix seconds)</li>
+            <li><span className="mono">X-Partner-TemplateId</span></li>
+            <li><span className="mono">X-Partner-ProgramId</span></li>
+            <li><span className="mono">X-Partner-FileName</span> (optional)</li>
+          </ul>
+          <p className="small">Sample curl (bash):</p>
+          <pre className="mono" style={preStyle}>
+{`BODY_HASH=$(sha256sum batch.csv | awk '{print $1}')
+TS=$(date +%s)
+CANONICAL="POST\\n/api/partners/embossing-batches\\n\${TS}\\n\${BODY_HASH}"
+SIG=$(echo -en "$CANONICAL" | openssl dgst -sha256 -mac HMAC \\
+  -macopt "hexkey:\${SECRET_HASH}" | awk '{print $2}')
+
+curl -X POST https://manage.karta.cards/api/partners/embossing-batches \\
+  -H "X-Partner-KeyId: \${KEY_ID}" \\
+  -H "X-Partner-Signature: \${SIG}" \\
+  -H "X-Partner-Timestamp: \${TS}" \\
+  -H "X-Partner-TemplateId: \${TEMPLATE_ID}" \\
+  -H "X-Partner-ProgramId: \${PROGRAM_ID}" \\
+  --data-binary @batch.csv`}
+          </pre>
+        </div>
+      </details>
+
+      <div className="btn-row" style={{ marginTop: 14 }}>
+        <button className="btn primary" onClick={onClose}>
+          I've stored these securely, close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const preStyle = {
+  background: 'var(--panel-2)',
+  border: '1px solid var(--edge)',
+  borderRadius: 'var(--radius)',
+  padding: 10,
+  fontSize: 12,
+  overflowX: 'auto' as const,
+  whiteSpace: 'pre' as const,
+  margin: '6px 0',
+};
+
+function CopyableField({
+  label,
+  value,
+  sensitive = false,
+}: {
+  label: string;
+  value: string;
+  sensitive?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // clipboard may be unavailable — user can still select and copy manually
+    }
+  };
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="small" style={{ color: sensitive ? 'var(--warn)' : 'var(--mute)' }}>
+        {label}
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', marginTop: 4 }}>
+        <code
+          className="mono"
+          style={{
+            flex: 1,
+            background: 'var(--panel-2)',
+            border: '1px solid var(--edge)',
+            borderRadius: 'var(--radius)',
+            padding: '8px 10px',
+            wordBreak: 'break-all',
+            fontSize: 12,
+          }}
+        >
+          {value}
+        </code>
+        <button className="btn ghost" onClick={copy} style={{ minHeight: 0, padding: '4px 10px' }}>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -798,10 +1258,30 @@ interface TierRule {
   label?: string;
 }
 
+type ProgramType =
+  | 'RETAIL'
+  | 'PREPAID_NON_RELOADABLE'
+  | 'PREPAID_RELOADABLE'
+  | 'DEBIT'
+  | 'CREDIT';
+
+const PROGRAM_TYPE_OPTIONS: { value: ProgramType; label: string }[] = [
+  { value: 'RETAIL', label: 'Retail' },
+  { value: 'PREPAID_NON_RELOADABLE', label: 'Prepaid (Non-Reloadable)' },
+  { value: 'PREPAID_RELOADABLE', label: 'Prepaid (Reloadable)' },
+  { value: 'DEBIT', label: 'Debit' },
+  { value: 'CREDIT', label: 'Credit' },
+];
+
+function programTypeLabel(t: string | undefined | null): string {
+  return PROGRAM_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? (t ?? '—');
+}
+
 interface Program {
   id: string;
   name: string;
   currency: string;
+  programType: ProgramType;
   tierRules: TierRule[];
   preActivationNdefUrlTemplate: string | null;
   postActivationNdefUrlTemplate: string | null;
@@ -918,6 +1398,7 @@ function ProgramsTab() {
               <th>ID</th>
               <th>Institution</th>
               <th>Name</th>
+              <th>Type</th>
               <th>Currency</th>
               <th>Rules</th>
               <th>NDEF templates</th>
@@ -932,6 +1413,7 @@ function ProgramsTab() {
                 <td className="mono">{p.id}</td>
                 <td>{p.financialInstitution?.name ?? <span className="small">—</span>}</td>
                 <td>{p.name}</td>
+                <td className="small">{programTypeLabel(p.programType)}</td>
                 <td className="mono">{p.currency}</td>
                 <td className="small">{p.tierRules.length} rule{p.tierRules.length === 1 ? '' : 's'}</td>
                 <td className="small">
@@ -982,6 +1464,9 @@ function ProgramForm({
   const [id, setId] = useState(program?.id ?? '');
   const [name, setName] = useState(program?.name ?? '');
   const [currency, setCurrency] = useState(program?.currency ?? 'AUD');
+  const [programType, setProgramType] = useState<ProgramType>(
+    program?.programType ?? 'PREPAID_RELOADABLE',
+  );
   const [financialInstitutionId, setFinancialInstitutionId] = useState<string>(
     program?.financialInstitutionId ?? fis[0]?.id ?? '',
   );
@@ -1027,6 +1512,7 @@ function ProgramForm({
       const body = {
         name,
         currency,
+        programType,
         tierRules: rules,
         preActivationNdefUrlTemplate: pre.trim() ? pre.trim() : null,
         postActivationNdefUrlTemplate: post.trim() ? post.trim() : null,
@@ -1088,6 +1574,24 @@ function ProgramForm({
         maxLength={3}
         style={{ width: 80 }}
       />
+
+      <label>Program type</label>
+      <select
+        value={programType}
+        onChange={(e) => setProgramType(e.target.value as ProgramType)}
+      >
+        {PROGRAM_TYPE_OPTIONS.map((opt) => (
+          <option key={opt.value} value={opt.value}>{opt.label}</option>
+        ))}
+      </select>
+      {programType === 'RETAIL' && (
+        <p className="small">
+          Retail cards ship to retailers in a SHIPPED state.  The microsite
+          shows info only until ops marks the card as SOLD (admin Cards tab
+          or partner <code>POST /api/partners/cards/mark-sold</code>).  Once
+          SOLD, the next tap runs the normal WebAuthn activation flow.
+        </p>
+      )}
 
       <h3 style={{ marginTop: 20 }}>Tier rules</h3>
       <p className="small">
@@ -2877,6 +3381,22 @@ function EmbossingBatchesTab() {
     load();
   }, [load]);
 
+  // Poll every 10 s so status transitions driven by the batch-processor
+  // worker (RECEIVED → PROCESSING → PROCESSED/FAILED) surface without a
+  // manual refresh.  Cheap — the admin is typically watching one program at
+  // a time and the endpoint is read-only.
+  useEffect(() => {
+    if (!selectedProgramId) return;
+    const id = window.setInterval(() => {
+      // Swallow errors here; the initial `load()` already surfaces them and
+      // we don't want a transient network blip to show a banner on every tick.
+      api.get<EmbossingBatchRow[]>(`/admin/programs/${selectedProgramId}/embossing-batches`)
+        .then(setBatches)
+        .catch(() => {});
+    }, 10_000);
+    return () => window.clearInterval(id);
+  }, [selectedProgramId]);
+
   const handleUpload = async () => {
     if (!selectedProgramId || !file || !selectedTemplateId) return;
     setErr(null);
@@ -3001,20 +3521,8 @@ function EmbossingBatchesTab() {
                 </td>
                 <td className="mono">{formatBytes(b.fileSize)}</td>
                 <td className="small">{b.template?.name ?? '—'}</td>
-                <td>
-                  <span className={`tag ${batchStatusTone(b.status)}`}>{b.status}</span>
-                  {b.processingError && (
-                    <div className="tag err" style={{ marginTop: 4 }}>{b.processingError}</div>
-                  )}
-                </td>
-                <td className="mono small">
-                  {b.recordCount === null ? '—' : (
-                    <>
-                      {b.recordsSuccess}/{b.recordCount}
-                      {b.recordsFailed > 0 && ` (${b.recordsFailed} failed)`}
-                    </>
-                  )}
-                </td>
+                <td><BatchStatusCell batch={b} /></td>
+                <td className="mono small"><BatchRecordsCell batch={b} /></td>
                 <td className="small">{b.uploadedVia}</td>
                 <td className="small">{formatDate(b.uploadedAt)}</td>
               </tr>
@@ -3026,11 +3534,98 @@ function EmbossingBatchesTab() {
   );
 }
 
-function batchStatusTone(s: string): 'ok' | 'err' | 'warn' | '' {
-  if (s === 'PROCESSED') return 'ok';
-  if (s === 'FAILED') return 'err';
-  if (s === 'PROCESSING' || s === 'RECEIVED') return 'warn';
-  return '';
+/**
+ * Colour-coded batch status badge.
+ *
+ *   RECEIVED   → neutral (gray) — uploaded but not picked up yet
+ *   PROCESSING → warn (amber) with a spinner — worker is parsing
+ *   PROCESSED  → ok (green) with "N/M records" subline
+ *   FAILED     → err (red) with truncated error + full error in title tooltip
+ *
+ * Keeps visual weight in the status column; the Records column stays a
+ * compact "successes / total · failed" tally for PROCESSED rows so admins
+ * can spot partial failures at a glance.
+ */
+function BatchStatusCell({ batch }: { batch: EmbossingBatchRow }) {
+  const s = batch.status;
+  if (s === 'PROCESSED') {
+    return (
+      <div>
+        <span className="tag ok">PROCESSED</span>
+        {batch.recordCount !== null && (
+          <div className="small" style={{ marginTop: 2 }}>
+            {batch.recordsSuccess}/{batch.recordCount} records
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (s === 'FAILED') {
+    const full = batch.processingError ?? 'Processing failed';
+    const truncated = full.length > 80 ? `${full.slice(0, 77)}…` : full;
+    return (
+      <div>
+        <span className="tag err">FAILED</span>
+        <div className="tag err" style={{ marginTop: 4 }} title={full}>
+          {truncated}
+        </div>
+      </div>
+    );
+  }
+  if (s === 'PROCESSING') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className="tag" style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}>
+          PROCESSING
+        </span>
+        <BatchSpinner />
+      </div>
+    );
+  }
+  if (s === 'RECEIVED') {
+    return <span className="tag">RECEIVED</span>;
+  }
+  // Unknown statuses fall back to a neutral tag so we never crash on new
+  // server-side values we haven't taught the UI about yet.
+  return <span className="tag">{s}</span>;
+}
+
+function BatchRecordsCell({ batch }: { batch: EmbossingBatchRow }) {
+  if (batch.recordCount === null) return <>—</>;
+  if (batch.status === 'PROCESSED') {
+    // Explicit format from spec: "recordsSuccess / recordCount · recordsFailed failed"
+    return (
+      <>
+        {batch.recordsSuccess} / {batch.recordCount}
+        {batch.recordsFailed > 0 && ` · ${batch.recordsFailed} failed`}
+      </>
+    );
+  }
+  // For PROCESSING / RECEIVED we still show raw progress if the worker wrote it.
+  return (
+    <>
+      {batch.recordsSuccess}/{batch.recordCount}
+      {batch.recordsFailed > 0 && ` (${batch.recordsFailed} failed)`}
+    </>
+  );
+}
+
+/** Tiny inline CSS spinner used in the PROCESSING status cell. */
+function BatchSpinner() {
+  return (
+    <span
+      aria-label="processing"
+      style={{
+        display: 'inline-block',
+        width: 12,
+        height: 12,
+        border: '2px solid var(--edge)',
+        borderTopColor: 'var(--accent)',
+        borderRadius: '50%',
+        animation: 'vera-spin 0.9s linear infinite',
+      }}
+    />
+  );
 }
 
 // --- Helpers -----------------------------------------------------------------

@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
-import { validateBody, badRequest, notFound } from '@vera/core';
+import { validateBody, badRequest, notFound, conflict } from '@vera/core';
 import { prisma } from '@vera/db';
 
 // PATCH /api/cards/:id — admin-only card update (program reassignment).
+// POST  /api/cards/:cardRef/mark-sold — flip a retail card from SHIPPED → SOLD
 // Registration (POST /api/cards/register) belongs to the activation service.
 
 const router: Router = Router();
@@ -48,6 +49,39 @@ router.patch('/:id', validateBody(patchSchema), async (req, res) => {
     }
     throw err;
   }
+});
+
+// POST /api/cards/:cardRef/mark-sold
+//
+// Flips a retail card's retailSaleStatus from SHIPPED to SOLD.  Admin-only
+// path — partner API has its own bulk equivalent mounted under /api/partners.
+// Idempotent: calling on an already-SOLD card is a no-op (204).  Calling on
+// a non-retail card returns 409 so accidental clicks don't silently change
+// non-retail behaviour.
+router.post('/:cardRef/mark-sold', async (req, res) => {
+  const cardRef = req.params.cardRef;
+  const card = await prisma.card.findUnique({
+    where: { cardRef },
+    select: {
+      id: true,
+      retailSaleStatus: true,
+      program: { select: { programType: true } },
+    },
+  });
+  if (!card) throw notFound('card_not_found', `Card ${cardRef} not found`);
+  if (card.program?.programType !== 'RETAIL') {
+    throw conflict('not_retail', 'Only RETAIL program cards have a sale status');
+  }
+  if (card.retailSaleStatus === 'SOLD') {
+    res.status(204).end();
+    return;
+  }
+  const updated = await prisma.card.update({
+    where: { id: card.id },
+    data: { retailSaleStatus: 'SOLD', retailSoldAt: new Date() },
+    select: { cardRef: true, retailSaleStatus: true, retailSoldAt: true },
+  });
+  res.json(updated);
 });
 
 export default router;

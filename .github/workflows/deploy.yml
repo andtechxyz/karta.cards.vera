@@ -72,6 +72,11 @@ jobs:
             port: 3006
           - service: rca
             port: 3007
+          - service: batch-processor
+            port: 3008
+          - service: sftp
+            port: 22
+            dockerfile: services/sftp/Dockerfile
 
     env:
       IMAGE_TAG: ${{ github.sha }}
@@ -95,9 +100,11 @@ jobs:
         run: |
           SHORT_SHA=${GITHUB_SHA::7}
           FULL_IMAGE=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO }}
+          DOCKERFILE="${{ matrix.dockerfile || 'Dockerfile' }}"
 
           docker build \
             --build-arg SERVICE=${{ matrix.service }} \
+            -f "${DOCKERFILE}" \
             -t ${FULL_IMAGE}:${SHORT_SHA} \
             -t ${FULL_IMAGE}:latest \
             .

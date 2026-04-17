@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { validateBody } from '@vera/core';
+import { programTypeSchema } from '@vera/programs';
 import {
   createProgram,
   currencySchema,
@@ -25,6 +26,7 @@ const upsertBaseSchema = z.object({
   name: z.string().min(1).max(128),
   currency: currencySchema,
   tierRules: tierRuleSetSchema,
+  programType: programTypeSchema.optional(),
   preActivationNdefUrlTemplate: z.string().url().nullable().optional(),
   postActivationNdefUrlTemplate: z.string().url().nullable().optional(),
   financialInstitutionId: z.string().optional(),

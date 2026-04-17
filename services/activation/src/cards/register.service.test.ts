@@ -7,6 +7,13 @@ vi.mock('@vera/db', () => ({
     card: {
       findUnique: vi.fn(),
       create: vi.fn(),
+      update: vi.fn(),
+    },
+    program: {
+      // register.service looks up program.programType so it can default
+      // retail cards to retailSaleStatus=SHIPPED.  Tests that don't set up
+      // a program mock get a null (→ non-retail path).
+      findUnique: vi.fn().mockResolvedValue(null),
     },
   },
 }));

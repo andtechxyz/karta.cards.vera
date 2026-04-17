@@ -14,6 +14,7 @@ export interface UpsertProgramInput {
   name: string;
   currency: string;
   tierRules: unknown; // Zod-validated inside
+  programType?: string; // Zod-validated by route; defaults to PREPAID_RELOADABLE in DB
   preActivationNdefUrlTemplate?: string | null;
   postActivationNdefUrlTemplate?: string | null;
   financialInstitutionId?: string | null;
@@ -35,6 +36,10 @@ export async function createProgram(input: UpsertProgramInput): Promise<Program>
         name: input.name,
         currency: normaliseCurrency(input.currency),
         tierRules: rules,
+        // Column has a DB default (PREPAID_RELOADABLE) — only pass when the
+        // caller explicitly set one so creates without a programType still
+        // hit the default path.
+        ...(input.programType ? { programType: input.programType } : {}),
         preActivationNdefUrlTemplate: input.preActivationNdefUrlTemplate ?? null,
         postActivationNdefUrlTemplate: input.postActivationNdefUrlTemplate ?? null,
         financialInstitutionId: input.financialInstitutionId ?? null,
@@ -57,6 +62,7 @@ export async function updateProgram(
   if (patch.name !== undefined) data.name = patch.name;
   if (patch.currency !== undefined) data.currency = normaliseCurrency(patch.currency);
   if (patch.tierRules !== undefined) data.tierRules = tierRuleSetSchema.parse(patch.tierRules);
+  if (patch.programType !== undefined) data.programType = patch.programType;
   if (patch.preActivationNdefUrlTemplate !== undefined) {
     if (patch.preActivationNdefUrlTemplate) {
       validateNdefUrlTemplate(patch.preActivationNdefUrlTemplate);

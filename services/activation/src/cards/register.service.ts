@@ -86,6 +86,18 @@ export async function registerCard(input: RegisterCardInput): Promise<RegisterCa
   if (byRef) throw conflict('card_ref_taken', 'cardRef already registered');
   if (byUid) throw conflict('card_uid_taken', 'A card with this UID is already registered');
 
+  // Retail programs ship cards to retailers in an inactive state — the tap
+  // flow routes to info-only until the card is marked SOLD.  All other
+  // programs leave retailSaleStatus NULL (activation works on first tap).
+  let retailSaleStatus: 'SHIPPED' | null = null;
+  if (input.programId) {
+    const prog = await prisma.program.findUnique({
+      where: { id: input.programId },
+      select: { programType: true },
+    });
+    if (prog?.programType === 'RETAIL') retailSaleStatus = 'SHIPPED';
+  }
+
   // Encrypt BEFORE the vault call so a key-version drift fails fast without
   // creating an orphaned VaultEntry we can't link a Card to.  These fields
   // live under the card-field DEK (distinct from vault's PAN DEK).
@@ -136,6 +148,7 @@ export async function registerCard(input: RegisterCardInput): Promise<RegisterCa
       programId: input.programId,
       batchId: input.batchId,
       vaultEntryId: vaulted.vaultEntryId,
+      retailSaleStatus,
     },
     select: { id: true, cardRef: true, status: true },
   });

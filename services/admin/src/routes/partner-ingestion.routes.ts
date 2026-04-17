@@ -1,8 +1,10 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { createHash, createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import express from 'express';
+import { z } from 'zod';
 import { prisma } from '@vera/db';
-import { ApiError, badRequest, notFound, unauthorized } from '@vera/core';
+import { ApiError, badRequest, notFound, unauthorized, validateBody } from '@vera/core';
 import { getAdminConfig } from '../env.js';
 
 // ---------------------------------------------------------------------------
@@ -237,6 +239,117 @@ router.post('/embossing-batches', async (req: PartnerRequest, res) => {
 
   res.status(201).json({ batchId: batch.id, status: batch.status, uploadedAt: batch.uploadedAt });
 });
+
+// --- POST /api/partners/cards/mark-sold -------------------------------------
+//
+// Bulk flip retail cards from SHIPPED → SOLD.  Used when a retailer's POS
+// reports a sale.  Scoped to the caller's FI: every cardRef must belong to
+// a Card whose program.financialInstitutionId matches the partner credential.
+//
+// Body (JSON — separate from the binary batch upload route):
+//   { "cardRefs": ["kc_ABC...", "kc_DEF..."] }
+//
+// Response:
+//   { updated: ["kc_ABC..."], skipped: ["kc_DEF..."], notFound: [...],
+//     wrongFi: [...], notRetail: [...] }
+//
+// Idempotent: SOLD cards go into `skipped`, not `updated`, so a retry is a
+// no-op from the partner's point of view.
+
+const markSoldSchema = z.object({
+  cardRefs: z.array(z.string().min(1).max(64)).min(1).max(1000),
+});
+
+// express.json() is scoped to this route — /embossing-batches keeps the
+// raw-body reader it needs for its signature hash.
+router.post(
+  '/cards/mark-sold',
+  express.json({ limit: '256kb' }),
+  validateBody(markSoldSchema),
+  async (req: PartnerRequest, res) => {
+    const cred = req.partnerCredential;
+    if (!cred) throw new ApiError(500, 'ingestion_state', 'partner middleware did not populate request');
+
+    const { cardRefs } = req.body as z.infer<typeof markSoldSchema>;
+
+    const cards = await prisma.card.findMany({
+      where: { cardRef: { in: cardRefs } },
+      select: {
+        id: true,
+        cardRef: true,
+        retailSaleStatus: true,
+        program: {
+          select: { programType: true, financialInstitutionId: true },
+        },
+      },
+    });
+
+    const byRef = new Map(cards.map((c) => [c.cardRef, c]));
+    const updated: string[] = [];
+    const skipped: string[] = [];
+    const missing: string[] = [];
+    const wrongFi: string[] = [];
+    const notRetail: string[] = [];
+    const toUpdate: string[] = [];
+
+    for (const ref of cardRefs) {
+      const c = byRef.get(ref);
+      if (!c) {
+        missing.push(ref);
+        continue;
+      }
+      if (c.program?.financialInstitutionId !== cred.financialInstitutionId) {
+        // Don't leak whether the card exists — treat both "belongs to
+        // another FI" and "belongs to no FI" as access denied.
+        wrongFi.push(ref);
+        continue;
+      }
+      if (c.program?.programType !== 'RETAIL') {
+        notRetail.push(ref);
+        continue;
+      }
+      if (c.retailSaleStatus === 'SOLD') {
+        skipped.push(ref);
+        continue;
+      }
+      toUpdate.push(ref);
+    }
+
+    if (toUpdate.length > 0) {
+      const now = new Date();
+      const result = await prisma.card.updateMany({
+        where: { cardRef: { in: toUpdate } },
+        data: { retailSaleStatus: 'SOLD', retailSoldAt: now },
+      });
+      if (result.count !== toUpdate.length) {
+        // Some cards raced into SOLD between the read and the write —
+        // recompute.  Not an error; just move them to skipped.
+        const reread = await prisma.card.findMany({
+          where: { cardRef: { in: toUpdate } },
+          select: { cardRef: true, retailSaleStatus: true },
+        });
+        const final = new Map(reread.map((c) => [c.cardRef, c]));
+        for (const ref of toUpdate) {
+          if (final.get(ref)?.retailSaleStatus === 'SOLD' && !skipped.includes(ref)) {
+            updated.push(ref);
+          } else {
+            skipped.push(ref);
+          }
+        }
+      } else {
+        updated.push(...toUpdate);
+      }
+    }
+
+    res.json({
+      updated,
+      skipped,
+      notFound: missing,
+      wrongFi,
+      notRetail,
+    });
+  },
+);
 
 // --- Helpers ---------------------------------------------------------------
 

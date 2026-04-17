@@ -69,3 +69,8 @@ table { width: 100%; border-collapse: collapse; }
 th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--edge); font-size: 14px; }
 th { color: var(--mute); font-weight: 500; }
 .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+
+@keyframes vera-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}

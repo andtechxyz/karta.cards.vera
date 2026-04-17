@@ -189,6 +189,25 @@ ensure_secret "vera/DATA_PREP_SERVICE_URL"      "http://internal-vera-internal-8
 ensure_secret "vera/RCA_SERVICE_URL"            "http://internal-vera-internal-886106335.ap-southeast-2.elb.amazonaws.com:3007"
 ensure_secret "vera/CALLBACK_HMAC_SECRET"       "CHANGEME"
 
+# Batch processor — parses uploaded embossing files from S3 and routes records
+# to activation.  Shares EMBOSSING_KEY_V1 with the admin service (both read the
+# same EmbossingTemplate rows).  SERVICE_AUTH_BATCH_PROCESSOR_SECRET must also
+# be registered in vera/PROVISION_AUTH_KEYS under keyId "batch-processor".
+ensure_secret "vera/EMBOSSING_KEY_V1"           "CHANGEME"
+ensure_secret "vera/EMBOSSING_KEY_ACTIVE_VERSION" "1"
+ensure_secret "vera/EMBOSSING_BUCKET"           "karta-embossing-files-${ACCOUNT}"
+ensure_secret "vera/SERVICE_AUTH_BATCH_PROCESSOR_SECRET" "CHANGEME"
+ensure_secret "vera/POLL_INTERVAL_MS"           "30000"
+ensure_secret "vera/ACTIVATION_SERVICE_URL"     "http://internal-vera-internal-886106335.ap-southeast-2.elb.amazonaws.com:3002"
+
+# SFTP service — self-hosted SFTP ingestion endpoint for partner embossing
+# files.  SFTP_USERS is a JSON array of {username, uid, sshPublicKey}; each
+# username MUST match a FinancialInstitution.slug.  Rotate keys by updating
+# the secret and restarting the ECS service.
+ensure_secret "vera/SFTP_USERS"                 "[]"
+ensure_secret "vera/SFTP_POLL_INTERVAL_MS"      "30000"
+ensure_secret "vera/SFTP_STABILITY_MS"          "15000"
+
 # ===========================================================================
 echo ""
 echo "============================================================"
@@ -196,7 +215,7 @@ echo " 2. CLOUDWATCH LOG GROUPS"
 echo "============================================================"
 # ===========================================================================
 
-for svc in tap activation pay vault admin data-prep rca; do
+for svc in tap activation pay vault admin data-prep rca batch-processor sftp; do
   ensure_log_group "/ecs/vera-${svc}"
 done
 
@@ -237,6 +256,15 @@ ARN_ADMIN_API_KEY=$(get_secret_arn "vera/ADMIN_API_KEY")
 ARN_KMS_SAD_KEY_ARN=$(get_secret_arn "vera/KMS_SAD_KEY_ARN")
 ARN_SERVICE_AUTH_PROVISIONING_SECRET=$(get_secret_arn "vera/SERVICE_AUTH_PROVISIONING_SECRET")
 ARN_CALLBACK_HMAC_SECRET=$(get_secret_arn "vera/CALLBACK_HMAC_SECRET")
+ARN_EMBOSSING_KEY_V1=$(get_secret_arn "vera/EMBOSSING_KEY_V1")
+ARN_EMBOSSING_KEY_ACTIVE_VERSION=$(get_secret_arn "vera/EMBOSSING_KEY_ACTIVE_VERSION")
+ARN_EMBOSSING_BUCKET=$(get_secret_arn "vera/EMBOSSING_BUCKET")
+ARN_SERVICE_AUTH_BATCH_PROCESSOR_SECRET=$(get_secret_arn "vera/SERVICE_AUTH_BATCH_PROCESSOR_SECRET")
+ARN_POLL_INTERVAL_MS=$(get_secret_arn "vera/POLL_INTERVAL_MS")
+ARN_ACTIVATION_SERVICE_URL=$(get_secret_arn "vera/ACTIVATION_SERVICE_URL")
+ARN_SFTP_USERS=$(get_secret_arn "vera/SFTP_USERS")
+ARN_SFTP_POLL_INTERVAL_MS=$(get_secret_arn "vera/SFTP_POLL_INTERVAL_MS")
+ARN_SFTP_STABILITY_MS=$(get_secret_arn "vera/SFTP_STABILITY_MS")
 echo "  All secret ARNs resolved."
 
 # ---- tap (port 3001) ----
@@ -559,6 +587,117 @@ TASKJSON
 )" --query 'taskDefinition.taskDefinitionArn' --output text
 REGISTERED_TASK_DEFS+=("vera-rca")
 
+# --- batch-processor (port 3008, internal — pure worker, polls DB + S3) ---
+# No ALB routing — the service only exposes /api/health for target-group
+# health checks.  It reads EmbossingBatch rows in RECEIVED status, decrypts
+# the linked template, downloads the batch file from S3, parses it, and
+# HMAC-signs calls to activation's /api/cards/register.
+echo ""
+echo "--- Registering task definition: vera-batch-processor ---"
+aws ecs register-task-definition \
+  --region "$REGION" \
+  --cli-input-json "$(cat <<TASKJSON
+{
+  "family": "vera-batch-processor",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "${EXEC_ROLE}",
+  "containerDefinitions": [
+    {
+      "name": "vera-batch-processor",
+      "image": "${ECR_BASE}/vera-batch-processor:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 3008, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "AWS_REGION", "value": "${REGION}" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL",                         "valueFrom": "${ARN_DATABASE_URL}" },
+        { "name": "EMBOSSING_KEY_V1",                     "valueFrom": "${ARN_EMBOSSING_KEY_V1}" },
+        { "name": "EMBOSSING_KEY_ACTIVE_VERSION",         "valueFrom": "${ARN_EMBOSSING_KEY_ACTIVE_VERSION}" },
+        { "name": "EMBOSSING_BUCKET",                     "valueFrom": "${ARN_EMBOSSING_BUCKET}" },
+        { "name": "SERVICE_AUTH_BATCH_PROCESSOR_SECRET",  "valueFrom": "${ARN_SERVICE_AUTH_BATCH_PROCESSOR_SECRET}" },
+        { "name": "ACTIVATION_SERVICE_URL",               "valueFrom": "${ARN_ACTIVATION_SERVICE_URL}" },
+        { "name": "POLL_INTERVAL_MS",                     "valueFrom": "${ARN_POLL_INTERVAL_MS}" }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -q -O- http://localhost:3008/api/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vera-batch-processor",
+          "awslogs-region": "${REGION}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+TASKJSON
+)" --query 'taskDefinition.taskDefinitionArn' --output text
+REGISTERED_TASK_DEFS+=("vera-batch-processor")
+
+# --- sftp (port 22, public via NLB) -----------------------------------------
+# Runs sshd + the Node ingester in one container.  SFTP_USERS env is a JSON
+# array of partner accounts, each mapping to a FinancialInstitution.slug.
+# The ingester uploads received files to the shared embossing-files S3
+# bucket (same bucket admin + partner API write to) and creates RECEIVED
+# EmbossingBatch rows for the batch-processor to pick up.
+echo ""
+echo "--- Registering task definition: vera-sftp ---"
+aws ecs register-task-definition \
+  --region "$REGION" \
+  --cli-input-json "$(cat <<TASKJSON
+{
+  "family": "vera-sftp",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "${EXEC_ROLE}",
+  "containerDefinitions": [
+    {
+      "name": "vera-sftp",
+      "image": "${ECR_BASE}/vera-sftp:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 22, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "AWS_REGION", "value": "${REGION}" },
+        { "name": "SFTP_HOME_BASE", "value": "/home" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL",             "valueFrom": "${ARN_DATABASE_URL}" },
+        { "name": "EMBOSSING_BUCKET",         "valueFrom": "${ARN_EMBOSSING_BUCKET}" },
+        { "name": "SFTP_USERS",               "valueFrom": "${ARN_SFTP_USERS}" },
+        { "name": "SFTP_POLL_INTERVAL_MS",    "valueFrom": "${ARN_SFTP_POLL_INTERVAL_MS}" },
+        { "name": "SFTP_STABILITY_MS",        "valueFrom": "${ARN_SFTP_STABILITY_MS}" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vera-sftp",
+          "awslogs-region": "${REGION}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+TASKJSON
+)" --query 'taskDefinition.taskDefinitionArn' --output text
+REGISTERED_TASK_DEFS+=("vera-sftp")
+
 # ===========================================================================
 echo ""
 echo "============================================================"
@@ -570,11 +709,22 @@ svc_port() {
   case "$1" in
     tap) echo 3001 ;; activation) echo 3002 ;; pay) echo 3003 ;;
     vault) echo 3004 ;; admin) echo 3005 ;; data-prep) echo 3006 ;;
-    rca) echo 3007 ;;
+    rca) echo 3007 ;; batch-processor) echo 3008 ;; sftp) echo 22 ;;
   esac
 }
 
-for svc in tap activation pay vault admin data-prep rca; do
+for svc in tap activation pay vault admin data-prep rca batch-processor sftp; do
+  # batch-processor is a pure worker (no inbound traffic) — no TG needed.
+  # ECS uses a container-level healthCheck instead.
+  if [ "$svc" = "batch-processor" ]; then
+    echo "  [skip] Target group for $svc (pure worker — uses container healthCheck)"
+    continue
+  fi
+  # sftp uses a TCP target group attached to an NLB — handled separately
+  # below so the loop stays HTTP-only.
+  if [ "$svc" = "sftp" ]; then
+    continue
+  fi
   TG_NAME="vera-${svc}"
   PORT=$(svc_port "$svc")
 
@@ -609,6 +759,36 @@ for svc in tap activation pay vault admin data-prep rca; do
   local var_name="${svc//-/_}"
   eval "TG_ARN_${var_name}=\$EXISTING_TG"
 done
+
+# ---- SFTP — TCP target group for NLB (TCP health check on port 22) ----
+echo ""
+echo "--- SFTP target group (TCP / NLB) ---"
+
+SFTP_TG_ARN=$(aws elbv2 describe-target-groups \
+  --names "vera-sftp" \
+  --region "$REGION" \
+  --query 'TargetGroups[0].TargetGroupArn' \
+  --output text 2>/dev/null || true)
+
+if [ -n "$SFTP_TG_ARN" ] && [ "$SFTP_TG_ARN" != "None" ]; then
+  echo "  [exists] Target group vera-sftp ($SFTP_TG_ARN)"
+else
+  SFTP_TG_ARN=$(aws elbv2 create-target-group \
+    --name "vera-sftp" \
+    --protocol TCP \
+    --port 22 \
+    --vpc-id "$VPC" \
+    --target-type ip \
+    --health-check-protocol TCP \
+    --health-check-interval-seconds 30 \
+    --healthy-threshold-count 3 \
+    --unhealthy-threshold-count 3 \
+    --region "$REGION" \
+    --query 'TargetGroups[0].TargetGroupArn' \
+    --output text)
+  CREATED_TGS+=("vera-sftp")
+  echo "  [created] Target group vera-sftp ($SFTP_TG_ARN)"
+fi
 
 # ===========================================================================
 echo ""
@@ -864,15 +1044,91 @@ fi
 # ===========================================================================
 echo ""
 echo "============================================================"
+echo " 5b. NLB — SFTP endpoint (public, TCP:22)"
+echo "============================================================"
+# ===========================================================================
+
+# Public subnets derived from the public ALB so we don't have to hard-code
+# subnet IDs.  NLB must be in public subnets because partners dial in from
+# the internet.  Tasks behind it stay in private subnets (outbound via NAT).
+PUBLIC_SUBNETS=$(aws elbv2 describe-load-balancers \
+  --load-balancer-arns "$PUBLIC_ALB_ARN" \
+  --region "$REGION" \
+  --query "LoadBalancers[0].AvailabilityZones[].SubnetId" \
+  --output text | tr '[:space:]' ',' | sed 's/,$//')
+
+SFTP_NLB_ARN=$(aws elbv2 describe-load-balancers \
+  --names "vera-sftp" \
+  --region "$REGION" \
+  --query 'LoadBalancers[0].LoadBalancerArn' \
+  --output text 2>/dev/null || true)
+
+if [ -n "$SFTP_NLB_ARN" ] && [ "$SFTP_NLB_ARN" != "None" ]; then
+  echo "  [exists] NLB vera-sftp ($SFTP_NLB_ARN)"
+else
+  # Create as a network load balancer.  elastic-load-balancer-class-of-2018
+  # NLBs take a few minutes to provision.  internet-facing scheme makes the
+  # NLB publicly reachable.
+  # shellcheck disable=SC2086
+  SFTP_NLB_ARN=$(aws elbv2 create-load-balancer \
+    --name "vera-sftp" \
+    --type network \
+    --scheme internet-facing \
+    --ip-address-type ipv4 \
+    --subnets ${PUBLIC_SUBNETS//,/ } \
+    --region "$REGION" \
+    --query 'LoadBalancers[0].LoadBalancerArn' \
+    --output text)
+  echo "  [created] NLB vera-sftp ($SFTP_NLB_ARN)"
+  echo "  NLB provisioning takes ~3 min before it's routable — first DNS"
+  echo "  lookup will NXDOMAIN until AWS finishes setup."
+fi
+
+SFTP_LISTENER_ARN=$(aws elbv2 describe-listeners \
+  --load-balancer-arn "$SFTP_NLB_ARN" \
+  --region "$REGION" \
+  --query "Listeners[?Port==\`22\`].ListenerArn | [0]" \
+  --output text 2>/dev/null || true)
+
+if [ -z "$SFTP_LISTENER_ARN" ] || [ "$SFTP_LISTENER_ARN" = "None" ]; then
+  SFTP_LISTENER_ARN=$(aws elbv2 create-listener \
+    --load-balancer-arn "$SFTP_NLB_ARN" \
+    --protocol TCP \
+    --port 22 \
+    --default-actions "Type=forward,TargetGroupArn=${SFTP_TG_ARN}" \
+    --region "$REGION" \
+    --query 'Listeners[0].ListenerArn' \
+    --output text)
+  echo "  [created] NLB TCP:22 listener -> vera-sftp TG"
+else
+  echo "  [exists] NLB TCP:22 listener ($SFTP_LISTENER_ARN)"
+fi
+
+SFTP_NLB_DNS=$(aws elbv2 describe-load-balancers \
+  --load-balancer-arns "$SFTP_NLB_ARN" \
+  --region "$REGION" \
+  --query 'LoadBalancers[0].DNSName' \
+  --output text)
+echo "  NLB DNS: $SFTP_NLB_DNS"
+echo "  Add a CNAME: sftp.karta.cards -> $SFTP_NLB_DNS"
+
+# ===========================================================================
+echo ""
+echo "============================================================"
 echo " 6. ECS SERVICES"
 echo "============================================================"
 # ===========================================================================
 
-for svc in tap activation pay vault admin data-prep rca; do
+for svc in tap activation pay vault admin data-prep rca batch-processor sftp; do
   SVC_NAME="vera-${svc}"
   PORT=$(svc_port "$svc")
   local var_name="${svc//-/_}"
-  eval "TG_ARN=\$TG_ARN_${var_name}"
+  # sftp's TG is a TCP/NLB group — separately tracked in SFTP_TG_ARN above.
+  if [ "$svc" = "sftp" ]; then
+    TG_ARN="$SFTP_TG_ARN"
+  else
+    eval "TG_ARN=\$TG_ARN_${var_name}"
+  fi
 
   # Check if the service already exists
   EXISTING_SVC=$(aws ecs describe-services \
@@ -894,17 +1150,31 @@ for svc in tap activation pay vault admin data-prep rca; do
     SKIPPED_SERVICES+=("$SVC_NAME (updated)")
   else
     echo "  [creating] ECS service $SVC_NAME"
-    aws ecs create-service \
-      --cluster "$CLUSTER" \
-      --service-name "$SVC_NAME" \
-      --task-definition "$SVC_NAME" \
-      --desired-count 1 \
-      --launch-type FARGATE \
-      --network-configuration "awsvpcConfiguration={subnets=[${PRIVATE_SUBNETS}],securityGroups=[${ECS_SG}],assignPublicIp=DISABLED}" \
-      --load-balancers "targetGroupArn=${TG_ARN},containerName=${SVC_NAME},containerPort=${PORT}" \
-      --health-check-grace-period-seconds 120 \
-      --region "$REGION" \
-      --output text --query 'service.serviceName' > /dev/null
+    # batch-processor has no ALB attachment — container healthCheck gates
+    # deployments.  All other services attach to their target group.
+    if [ "$svc" = "batch-processor" ]; then
+      aws ecs create-service \
+        --cluster "$CLUSTER" \
+        --service-name "$SVC_NAME" \
+        --task-definition "$SVC_NAME" \
+        --desired-count 1 \
+        --launch-type FARGATE \
+        --network-configuration "awsvpcConfiguration={subnets=[${PRIVATE_SUBNETS}],securityGroups=[${ECS_SG}],assignPublicIp=DISABLED}" \
+        --region "$REGION" \
+        --output text --query 'service.serviceName' > /dev/null
+    else
+      aws ecs create-service \
+        --cluster "$CLUSTER" \
+        --service-name "$SVC_NAME" \
+        --task-definition "$SVC_NAME" \
+        --desired-count 1 \
+        --launch-type FARGATE \
+        --network-configuration "awsvpcConfiguration={subnets=[${PRIVATE_SUBNETS}],securityGroups=[${ECS_SG}],assignPublicIp=DISABLED}" \
+        --load-balancers "targetGroupArn=${TG_ARN},containerName=${SVC_NAME},containerPort=${PORT}" \
+        --health-check-grace-period-seconds 120 \
+        --region "$REGION" \
+        --output text --query 'service.serviceName' > /dev/null
+    fi
     CREATED_SERVICES+=("$SVC_NAME")
     echo "  [created] ECS service $SVC_NAME"
   fi
@@ -998,11 +1268,47 @@ echo "   - pay.karta.cards        -> (same)"
 echo "   - manage.karta.cards      -> (same)"
 echo ""
 echo "4. Ensure ECR repositories exist for each service:"
-echo "   vera-tap, vera-activation, vera-pay, vera-vault, vera-admin"
+echo "   vera-tap, vera-activation, vera-pay, vera-vault, vera-admin,"
+echo "   vera-data-prep, vera-rca, vera-batch-processor"
 echo ""
 echo "5. Ensure the execution role ($EXEC_ROLE) has:"
 echo "   - secretsmanager:GetSecretValue for vera/* secrets"
 echo "   - logs:CreateLogStream, logs:PutLogEvents for /ecs/vera-* groups"
 echo "   - ecr:GetAuthorizationToken, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer"
+echo ""
+echo "6. Ensure the vera-batch-processor task role has:"
+echo "   - s3:GetObject on arn:aws:s3:::karta-embossing-files-${ACCOUNT}/*"
+echo "   - kms:Decrypt on the KMS key used for the embossing bucket SSE"
+echo ""
+echo "7. Ensure the vera-sftp task role has:"
+echo "   - s3:PutObject on arn:aws:s3:::karta-embossing-files-${ACCOUNT}/*"
+echo "   - kms:Encrypt, kms:GenerateDataKey on the bucket SSE-KMS key"
+echo ""
+echo "8. Update the ECS security group ($ECS_SG) to allow partner SFTP:"
+echo "   - Inbound TCP:22 from 0.0.0.0/0 (or specific partner CIDRs if known)"
+echo "   NLB targets preserve source IP and have no SG of their own."
+echo ""
+echo "9. Seed vera/SFTP_USERS with the real partner list.  Format:"
+echo "     [{\"username\":\"<fi-slug>\",\"uid\":1001,\"sshPublicKey\":\"ssh-ed25519 ...\"}]"
+echo "   Username MUST equal the FinancialInstitution.slug.  Any change"
+echo "   requires an ECS service restart to re-provision Linux accounts:"
+echo "     aws ecs update-service --cluster $CLUSTER --service vera-sftp \\"
+echo "       --force-new-deployment --region $REGION"
+echo ""
+echo "10. Create DNS:  sftp.karta.cards  CNAME  <NLB DNS from above>"
+echo ""
+echo "11. Merge the 'batch-processor' key into vera/PROVISION_AUTH_KEYS."
+echo "   The JSON must contain BOTH provision-agent and batch-processor:"
+echo ""
+echo "     CURRENT=\$(aws secretsmanager get-secret-value \\"
+echo "       --secret-id vera/PROVISION_AUTH_KEYS --region $REGION \\"
+echo "       --query SecretString --output text)"
+echo "     NEW=\$(echo \"\$CURRENT\" | jq --arg k \"\$(aws secretsmanager \\"
+echo "       get-secret-value --secret-id vera/SERVICE_AUTH_BATCH_PROCESSOR_SECRET \\"
+echo "       --region $REGION --query SecretString --output text)\" \\"
+echo "       '. + {\"batch-processor\": \$k}')"
+echo "     aws secretsmanager put-secret-value \\"
+echo "       --secret-id vera/PROVISION_AUTH_KEYS \\"
+echo "       --secret-string \"\$NEW\" --region $REGION"
 echo ""
 echo "Done."

@@ -229,6 +229,16 @@ model Program {
   currency  String @db.VarChar(3) // ISO 4217 — all rules and card txns in this currency
   tierRules Json // TierRule[] — shape validated by Zod on write
 
+  // Product classification.  Drives UI, reporting, and behaviour at tap
+  // (e.g. RETAIL cards gate the activation flow on the SHIPPED → SOLD
+  // transition; non-retail programs let a PERSONALISED card activate on
+  // first tap).  Stored as String rather than a Prisma enum so we can add
+  // new types without a schema migration; write-path Zod enforces the set.
+  //
+  // Allowed values: RETAIL | PREPAID_NON_RELOADABLE | PREPAID_RELOADABLE |
+  //                 DEBIT | CREDIT
+  programType String @default("PREPAID_RELOADABLE")
+
   // --- NDEF URL templates --------------------------------------------------
   // Palisade writes these into the card's NDEF file at two moments:
   //
@@ -312,6 +322,18 @@ model Card {
   // Useful for audit; non-secret, but still optional since not every card
   // batch will surface it.
   chipSerial     String?
+
+  // Retail sale status — only meaningful when the parent Program has
+  // programType='RETAIL'.  A shipped card sits on the retailer's shelf and
+  // MUST NOT activate on tap (microsite shows info only).  Once the card
+  // is purchased the status flips to SOLD (via admin UI / partner API /
+  // POS integration) and subsequent taps follow the normal activation
+  // path.  Null for non-retail cards — their "sold" equivalent is implicit
+  // from the moment they reach the cardholder.
+  //
+  // Allowed values: SHIPPED | SOLD
+  retailSaleStatus String?
+  retailSoldAt     DateTime?
 
   // --- SDM keys (NXP AN12196 / AN14683) ------------------------------------
   // AES-128 keys written into the card during personalisation.  Both kept

@@ -37,9 +37,24 @@ router.get('/activate/:cardRef', async (req, res) => {
     const token = encodeURIComponent(result.handoffToken);
 
     // Look up the card's current status to decide where to redirect.
+    // Include program.programType + card.retailSaleStatus so we can detect
+    // the retail SHIPPED-vs-SOLD gate.
     const card = await prisma.card.findUnique({
       where: { cardRef },
-      select: { status: true, programId: true, program: { select: { postActivationNdefUrlTemplate: true } } },
+      select: {
+        status: true,
+        programId: true,
+        retailSaleStatus: true,
+        program: {
+          select: {
+            id: true,
+            programType: true,
+            postActivationNdefUrlTemplate: true,
+            micrositeEnabled: true,
+            micrositeActiveVersion: true,
+          },
+        },
+      },
     });
 
     if (card?.status === 'ACTIVATED') {
@@ -49,8 +64,19 @@ router.get('/activate/:cardRef', async (req, res) => {
       // Already provisioned — redirect to program payment URL or default.
       const paymentUrl = card.program?.postActivationNdefUrlTemplate ?? config.ACTIVATION_URL;
       res.redirect(302, paymentUrl);
+    } else if (
+      card?.program?.programType === 'RETAIL' &&
+      card.retailSaleStatus !== 'SOLD' &&
+      card.program.micrositeEnabled &&
+      card.program.micrositeActiveVersion
+    ) {
+      // Retail card still on the shelf (SHIPPED).  Land directly on the
+      // microsite in info-only mode — no handoff token, no WebAuthn.  The
+      // microsite reads `shipped=true` and hides its activation CTA.
+      const url = `${config.MICROSITE_CDN_URL.replace(/\/$/, '')}/programs/${card.program.id}/?card=${encodeURIComponent(cardRef)}&shipped=true`;
+      res.redirect(302, url);
     } else {
-      // PERSONALISED or unknown — default activation flow.
+      // PERSONALISED (non-retail or retail + SOLD) — default activation flow.
       res.redirect(302, `${config.ACTIVATION_URL}/activate#hand=${token}`);
     }
   } catch (e) {

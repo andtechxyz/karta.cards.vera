@@ -178,9 +178,11 @@ export interface ListCardRow {
   id: string;
   cardRef: string;
   status: string;
+  retailSaleStatus: string | null;
+  retailSoldAt: string | null;
   chipSerial: string | null;
   programId: string | null;
-  program: { id: string; name: string; currency: string } | null;
+  program: { id: string; name: string; currency: string; programType: string } | null;
   batchId: string | null;
   createdAt: string;
   updatedAt: string;

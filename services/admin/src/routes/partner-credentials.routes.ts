@@ -77,7 +77,14 @@ const createSchema = z.object({
 
 // POST /api/admin/financial-institutions/:fiId/credentials
 // Body: { description?, keyId? }
-// Response: { id, keyId, secret } — secret shown ONCE, never again.
+// Response: { id, keyId, secret, secretHash, salt } — secret shown ONCE, never again.
+//
+// We deliberately return `secretHash` + `salt` alongside the plaintext secret:
+// the HMAC scheme uses `secretHash` (= scrypt(secret, salt)) as the HMAC key,
+// so partners need it to sign requests without running scrypt themselves.
+// Both values are already surfaced to the partner via the scrypt hash stored
+// at rest — exposing them here at creation time doesn't widen the blast
+// radius.  The plaintext `secret` is the only irrecoverable value.
 router.post('/:fiId/credentials', validateBody(createSchema), async (req, res) => {
   const { fiId } = req.params;
   const fi = await prisma.financialInstitution.findUnique({ where: { id: fiId } });
@@ -113,7 +120,7 @@ router.post('/:fiId/credentials', validateBody(createSchema), async (req, res) =
       select: { id: true, keyId: true },
     });
     // Plaintext secret only appears here — never persisted.
-    res.status(201).json({ id: cred.id, keyId: cred.keyId, secret });
+    res.status(201).json({ id: cred.id, keyId: cred.keyId, secret, secretHash, salt });
   } catch (err: unknown) {
     if (err && typeof err === 'object' && 'code' in err && (err as { code?: string }).code === 'P2002') {
       throw badRequest('key_id_taken', `keyId "${keyId}" already in use`);
