@@ -3,7 +3,7 @@
 Two tests, same infrastructure:
 
 1. **Retail flow** — SecureGift card (InComm / RETAIL program, microsite)
-2. **FI product flow** — Karta Platinum card (Karta Bank / PREPAID_RELOADABLE, no microsite)
+2. **FI product flow** — Karta Platinum card (Karta Australia / PREPAID_RELOADABLE, no microsite)
 
 Both cards are **already seeded in prod**.  See
 `e2e-cards-seeded.txt` for the exact values (cardRef, PAN, UID, SDM keys, pre-registered FIDO cred IDs).

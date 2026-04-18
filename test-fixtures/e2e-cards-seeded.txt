@@ -4,7 +4,7 @@
 
 These two cards are live in production.  They correspond to:
   - a RETAIL flow card under InComm / SecureGift (microsite)
-  - an FI-product flow card under Karta Bank / Karta Platinum (no microsite)
+  - an FI-product flow card under Karta Australia / Karta Platinum (no microsite)
 
 Both have pre-registered FIDO credentials so activation can take the
 confirm-mode short-circuit (no WebAuthn ceremony at tap time) if needed.
@@ -44,7 +44,7 @@ To flip to SOLD (from admin UI or via curl below, then re-tap):
 ================================================================
  FI PRODUCT — Karta Platinum (PREPAID_RELOADABLE)
 ================================================================
-  FI slug:          kartabank
+  FI slug:          karta-australia
   Program:          karta_platinum
   Program type:     PREPAID_RELOADABLE
   cardRef:          e2e_fi_2590
