@@ -20,3 +20,9 @@ export function formatCountdown(sec: number): string {
 export function secondsUntil(iso: string, now: number = Date.now()): number {
   return Math.max(0, Math.floor((new Date(iso).getTime() - now) / 1000));
 }
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}

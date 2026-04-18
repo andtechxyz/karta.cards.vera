@@ -10,6 +10,26 @@
   --danger: #ff6b81;
   --warn: #ffbf6b;
   --radius: 10px;
+
+  --tone-success-fg: #22c55e;
+  --tone-success-bg: rgba(34, 197, 94, 0.14);
+  --tone-success-bd: rgba(34, 197, 94, 0.55);
+
+  --tone-warn-fg: #f59e0b;
+  --tone-warn-bg: rgba(245, 158, 11, 0.14);
+  --tone-warn-bd: rgba(245, 158, 11, 0.55);
+
+  --tone-danger-fg: #ef4444;
+  --tone-danger-bg: rgba(239, 68, 68, 0.14);
+  --tone-danger-bd: rgba(239, 68, 68, 0.6);
+
+  --tone-info-fg: #60a5fa;
+  --tone-info-bg: rgba(96, 165, 250, 0.14);
+  --tone-info-bd: rgba(96, 165, 250, 0.55);
+
+  --tone-neutral-fg: #cbd5e1;
+  --tone-neutral-bg: rgba(203, 213, 225, 0.08);
+  --tone-neutral-bd: rgba(203, 213, 225, 0.3);
 }
 
 * { box-sizing: border-box; }
@@ -23,7 +43,7 @@ body {
 a { color: var(--accent); }
 .app { min-height: 100vh; }
 .page {
-  max-width: 720px;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 24px 20px 80px;
 }
@@ -47,15 +67,46 @@ a { color: var(--accent); }
 .btn.ghost { background: transparent; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
-input, select {
+input, select, textarea {
   width: 100%; padding: 10px 12px; min-height: 42px;
   background: var(--panel-2); border: 1px solid var(--edge); color: var(--ink);
   border-radius: var(--radius); font: inherit;
 }
 label { display: block; margin: 10px 0 6px; color: var(--mute); font-size: 14px; }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--edge); margin: 16px 0; }
+
+/* Primary tabs (top-level) — wider hit-area, stronger active state. */
+.tabs-primary {
+  display: flex; gap: 2px; border-bottom: 1px solid var(--edge);
+  margin: 16px 0 0; flex-wrap: wrap;
+}
+.tab-primary {
+  padding: 10px 18px; background: transparent; border: 0; color: var(--mute);
+  cursor: pointer; font: inherit; font-weight: 600; font-size: 15px;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab-primary.active { color: var(--ink); border-bottom-color: var(--accent); }
+.tab-primary:hover { color: var(--ink); }
+
+/* Secondary tabs — smaller chips under the active primary. */
+.tabs-secondary {
+  display: flex; gap: 4px; margin: 12px 0 16px;
+  flex-wrap: wrap;
+}
+.tab-secondary {
+  padding: 6px 12px; background: var(--panel-2); border: 1px solid var(--edge);
+  color: var(--mute); border-radius: 999px; cursor: pointer; font: inherit;
+  font-size: 13px;
+}
+.tab-secondary.active {
+  background: var(--accent); color: #0b1020; border-color: transparent;
+}
+.tab-secondary:hover:not(.active) { color: var(--ink); }
+
+/* Legacy .tabs retained for any panels that still use it. */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--edge); margin: 16px 0; flex-wrap: wrap; }
 .tab { padding: 10px 14px; background: transparent; border: 0; color: var(--mute); cursor: pointer; font: inherit; }
 .tab.active { color: var(--ink); border-bottom: 2px solid var(--accent); }
+
 .small { color: var(--mute); font-size: 13px; }
 .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 13px; }
 .tag {
@@ -65,10 +116,77 @@ label { display: block; margin: 10px 0 6px; color: var(--mute); font-size: 14px;
 .tag.ok { color: var(--accent-2); border-color: var(--accent-2); }
 .tag.warn { color: var(--warn); border-color: var(--warn); }
 .tag.err { color: var(--danger); border-color: var(--danger); }
+
+/* StatusChip — bright, high-contrast. */
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border-radius: 999px; font-size: 11px;
+  font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  border: 1px solid transparent;
+}
+.chip.success { color: var(--tone-success-fg); background: var(--tone-success-bg); border-color: var(--tone-success-bd); }
+.chip.warn    { color: var(--tone-warn-fg);    background: var(--tone-warn-bg);    border-color: var(--tone-warn-bd); }
+.chip.danger  { color: var(--tone-danger-fg);  background: var(--tone-danger-bg);  border-color: var(--tone-danger-bd); }
+.chip.info    { color: var(--tone-info-fg);    background: var(--tone-info-bg);    border-color: var(--tone-info-bd); }
+.chip.neutral { color: var(--tone-neutral-fg); background: var(--tone-neutral-bg); border-color: var(--tone-neutral-bd); }
+
 table { width: 100%; border-collapse: collapse; }
-th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--edge); font-size: 14px; }
+th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--edge); font-size: 14px; vertical-align: top; }
 th { color: var(--mute); font-weight: 500; }
 .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+
+/* vera-table — fixed column layout with ellipsis + copy-on-click. */
+.vera-table { table-layout: fixed; }
+.vera-table td, .vera-table th {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.vera-table tr.clickable { cursor: pointer; }
+.vera-table tr.clickable:hover { background: rgba(110, 168, 255, 0.04); }
+.vera-table tr.active { background: rgba(110, 168, 255, 0.12); }
+.vera-table .cell-copy {
+  cursor: copy; display: inline-flex; align-items: center; gap: 4px;
+}
+.vera-table .cell-copy:hover { text-decoration: underline; text-decoration-style: dotted; }
+.vera-table .copy-flash {
+  font-size: 10px; color: var(--accent-2); margin-left: 4px;
+}
+
+/* Table toolbar — search + filters. */
+.vera-toolbar {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  margin: 12px 0;
+}
+.vera-toolbar .search {
+  flex: 1 1 220px; min-width: 220px; max-width: 360px;
+}
+
+/* Drawer — right-edge panel. */
+.vera-drawer-scrim {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+  z-index: 40;
+}
+.vera-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(480px, 100vw);
+  background: var(--panel);
+  border-left: 1px solid var(--edge);
+  z-index: 41;
+  display: flex; flex-direction: column;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.4);
+}
+.vera-drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--edge);
+}
+.vera-drawer-head h3 { margin: 0; font-size: 16px; }
+.vera-drawer-body {
+  flex: 1; overflow-y: auto; padding: 20px;
+}
+.vera-drawer-close {
+  background: transparent; border: 0; color: var(--mute); cursor: pointer;
+  font-size: 22px; line-height: 1; padding: 4px 8px;
+}
+.vera-drawer-close:hover { color: var(--ink); }
 
 @keyframes vera-spin {
   from { transform: rotate(0deg); }
