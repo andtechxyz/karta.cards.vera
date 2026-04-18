@@ -1,27 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, errorMsg } from '../utils/api';
-import { biometricHint, detectDevice, deviceNameGuess } from '../utils/device';
+import { biometricHint, detectDevice, deviceNameGuess, type Device } from '../utils/device';
 import { activateWithSession } from '../utils/webauthn';
 
-// /activate — identity-blind activation page.
-//
-// The user lands here in one of three ways:
-//   1. SUN-tap success: `#hand=<handoff-token>` in the URL fragment, set by
-//      the tap service's redirect.  The page exchanges the handoff token for
-//      an activation session, then drives the WebAuthn ceremony.
-//   2. SUN-tap failure: `?error=<code>`.  Show a friendly message and ask
-//      the user to tap again.
-//   3. No params at all: probably someone hand-typed /activate.  Show the
-//      "tap your card" prompt.
-//
-// The handoff token lives in the URL *fragment* so it never appears in server
-// logs — the server only sees the subsequent POST to /api/activation/handoff.
+// /activate — identity-blind activation page.  After the tap service
+// redirects here, we run a WebAuthn ceremony (assertion in the common case
+// of preregistered FIDO credentials, registration as a fallback) to flip
+// the card to ACTIVATED.  The assertion also pushes a fresh baseUrl + CMAC
+// to the T4T applet via an extended credential ID — chip self-updates on
+// the same tap.
 
 type Phase = 'idle' | 'exchanging' | 'busy' | 'done';
 
 function extractHandToken(): string | null {
-  const hash = window.location.hash; // e.g. "#hand=<token>"
+  const hash = window.location.hash;
   if (!hash.startsWith('#hand=')) return null;
   return decodeURIComponent(hash.slice('#hand='.length)) || null;
 }
@@ -47,7 +40,6 @@ export default function Activate() {
       .post<{ sessionToken: string }>('/activation/handoff', { token: handToken })
       .then(({ sessionToken: tok }) => {
         setSessionToken(tok);
-        // Clear the fragment so the token isn't bookmarked or logged.
         history.replaceState(null, '', window.location.pathname + window.location.search);
         setPhase('idle');
       })
@@ -73,8 +65,6 @@ export default function Activate() {
     }
   }, [sessionToken]);
 
-  // When activation succeeds and the program has a microsite configured,
-  // redirect after a 2s delay so the user sees the confirmation screen first.
   useEffect(() => {
     if (phase === 'done' && micrositeUrl) {
       const t = setTimeout(() => {
@@ -84,16 +74,10 @@ export default function Activate() {
     }
   }, [phase, micrositeUrl]);
 
-  // Auto-fire activation as soon as we have a session — the user has already
-  // tapped once to get here; making them push a button is busywork.  We
-  // auto-fire on every device because the server's /begin response dictates
-  // whether we need a second NFC WebAuthn tap (mode=register — Android only)
-  // or we can confirm silently (mode=confirm — works on any device).
-  useEffect(() => {
-    if (sessionToken && phase === 'idle' && !err) {
-      onActivate();
-    }
-  }, [sessionToken, phase, err, onActivate]);
+  // NOTE: no auto-fire.  iOS Safari refuses navigator.credentials.get()
+  // outside a user-activation handler ("The document is not focused").
+  // Requiring a button tap satisfies that on every platform + gives the
+  // user a clear "I'm about to be prompted for NFC" signal.
 
   if (sunError) return <ErrorPanel title="Tap not recognised" code={sunError} />;
 
@@ -109,8 +93,8 @@ export default function Activate() {
     return (
       <Page title="Tap your card">
         <p className="small">
-          Hold your Palisade card flat against the back of your phone to start
-          activation. The phone will redirect to a fresh page when it sees the card.
+          Hold your card flat against the back of your phone to start
+          activation.
         </p>
       </Page>
     );
@@ -142,44 +126,88 @@ export default function Activate() {
     );
   }
 
-  // Show the "use Android Chrome" message ONLY if we hit an error on
-  // non-Android — pre-registered credentials (confirm mode) don't need a
-  // WebAuthn ceremony and work on any device, so we don't gate the page
-  // on device until we have evidence the current flow actually needs it.
-  if (device !== 'android' && err) {
-    return (
-      <Page title="Open this on Android Chrome">
-        <p className="small">
-          This card needs a fresh WebAuthn registration, and Android Chrome is
-          the only widely-supported browser for NFC WebAuthn today.  Open the
-          same link there, then tap your card.
-        </p>
-        <p className="small" style={{ marginTop: 12, opacity: 0.7 }}>
-          Error: <span className="mono">{err}</span>
-        </p>
-      </Page>
-    );
-  }
-
+  // --- Pre-activation: prominent button + per-platform copy --------------
   return (
-    <Page title="Tap your card again">
-      <p className="small">
-        Hold the card against the back of your phone.{' '}
-        {phase === 'busy' && 'Waiting for tap…'}
+    <Page title="Activate your card">
+      <p className="small" style={{ marginBottom: 16 }}>
+        {prePromptCopy(device)}
       </p>
-      {err && <p className="tag err" style={{ marginTop: 12 }}>{err}</p>}
+      <button
+        className="btn primary"
+        onClick={onActivate}
+        disabled={phase === 'busy'}
+        style={{ width: '100%', padding: '14px 16px', fontSize: 16 }}
+      >
+        {phase === 'busy' ? 'Waiting for tap…' : 'Activate'}
+      </button>
       {err && (
-        <button
-          className="btn primary"
-          onClick={onActivate}
-          disabled={phase === 'busy'}
-          style={{ width: '100%', marginTop: 12 }}
-        >
-          Try again
-        </button>
+        <div style={{ marginTop: 16 }}>
+          <p className="tag err" style={{ marginBottom: 8 }}>
+            {friendlyError(err, device)}
+          </p>
+          <p className="small" style={{ opacity: 0.6 }}>
+            Technical: <span className="mono">{err}</span>
+          </p>
+        </div>
       )}
     </Page>
   );
+}
+
+/**
+ * Short, platform-tuned line that appears above the Activate button.
+ * Rough on intent: on iOS, the user will see a native sheet + security key
+ * icon; on Android they'll see a Chrome NFC prompt.  Desktop is dead-end
+ * until hybrid transport on the phone is set up.
+ */
+function prePromptCopy(device: Device): string {
+  if (device === 'ios') {
+    return 'When you tap Activate, iOS will ask you to hold your card near the top of your iPhone.';
+  }
+  if (device === 'android') {
+    return 'When you tap Activate, Chrome will ask you to hold your card against the back of your phone.';
+  }
+  return 'Open this link on the phone you just tapped the card with — desktop browsers can\'t complete the NFC step.';
+}
+
+/**
+ * Translate raw WebAuthn browser errors into actionable language.  Most
+ * mobile WebAuthn failures fall into a small set of well-known DOMExceptions;
+ * each has a platform-specific cause/remedy.
+ */
+function friendlyError(raw: string, device: Device): string {
+  const r = raw.toLowerCase();
+
+  // "The document is not focused" — iOS Safari + Chrome both throw this when
+  // the WebAuthn call wasn't initiated by a user gesture.
+  if (r.includes('document is not focused') || r.includes('not focused')) {
+    return device === 'ios'
+      ? 'Tap the Activate button to start the NFC prompt. iOS needs a button tap before it opens the security-key reader.'
+      : 'Tap the Activate button to start the NFC prompt.';
+  }
+
+  // AbortError / NotAllowedError — user cancelled, ceremony timed out, or
+  // no matching credential on the card.
+  if (r.includes('notallowed') || r.includes('aborterror')) {
+    return 'The tap was cancelled or timed out. Try again and hold the card against the phone until it vibrates / the prompt closes.';
+  }
+
+  // InvalidStateError — usually a stale credential.
+  if (r.includes('invalidstateerror')) {
+    return 'This card doesn\'t match the stored credential. Contact support if this persists.';
+  }
+
+  // Generic NFC / reader failure.
+  if (r.includes('nfc') || r.includes('reader')) {
+    return device === 'ios'
+      ? 'iPhone couldn\'t read the card. Hold it flat across the top of the phone, screen up.'
+      : 'Couldn\'t read the card over NFC. Make sure NFC is on and the card is against the back of the phone.';
+  }
+
+  // Fall-through.
+  return device === 'desktop'
+    ? 'Desktop browsers can\'t complete the NFC step. Open the same link on your phone.'
+    : 'Activation hit an unexpected error. Tap Activate to try again.';
 }
 
 function Page({
