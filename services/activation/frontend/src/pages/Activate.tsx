@@ -84,15 +84,16 @@ export default function Activate() {
     }
   }, [phase, micrositeUrl]);
 
-  // Auto-fire the WebAuthn ceremony as soon as we have a session — the user
-  // has already tapped once to get here; making them push a button before
-  // the second tap is busywork.  Skip on non-Android since the platform
-  // doesn't speak NFC + CTAP1 reliably.
+  // Auto-fire activation as soon as we have a session — the user has already
+  // tapped once to get here; making them push a button is busywork.  We
+  // auto-fire on every device because the server's /begin response dictates
+  // whether we need a second NFC WebAuthn tap (mode=register — Android only)
+  // or we can confirm silently (mode=confirm — works on any device).
   useEffect(() => {
-    if (sessionToken && phase === 'idle' && !err && device === 'android') {
+    if (sessionToken && phase === 'idle' && !err) {
       onActivate();
     }
-  }, [sessionToken, phase, err, device, onActivate]);
+  }, [sessionToken, phase, err, onActivate]);
 
   if (sunError) return <ErrorPanel title="Tap not recognised" code={sunError} />;
 
@@ -141,12 +142,20 @@ export default function Activate() {
     );
   }
 
-  if (device !== 'android') {
+  // Show the "use Android Chrome" message ONLY if we hit an error on
+  // non-Android — pre-registered credentials (confirm mode) don't need a
+  // WebAuthn ceremony and work on any device, so we don't gate the page
+  // on device until we have evidence the current flow actually needs it.
+  if (device !== 'android' && err) {
     return (
       <Page title="Open this on Android Chrome">
         <p className="small">
-          Activation needs an NFC tap, and Android Chrome is the only widely-supported
-          browser for it today. Open this same link there, then tap your card.
+          This card needs a fresh WebAuthn registration, and Android Chrome is
+          the only widely-supported browser for NFC WebAuthn today.  Open the
+          same link there, then tap your card.
+        </p>
+        <p className="small" style={{ marginTop: 12, opacity: 0.7 }}>
+          Error: <span className="mono">{err}</span>
         </p>
       </Page>
     );
