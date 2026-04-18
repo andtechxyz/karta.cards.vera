@@ -3,7 +3,7 @@
     "apps": [],
     "details": [
       {
-        "appIDs": ["TEAM_ID.com.mobile.karta.cards"],
+        "appIDs": ["39L78JXRV9.com.mobile.karta.cards"],
         "components": [
           { "/": "/pay/*" }
         ]

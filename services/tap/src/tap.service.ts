@@ -1,6 +1,6 @@
 import { prisma } from '@vera/db';
 import { decrypt, badRequest, notFound, gone, unauthorized } from '@vera/core';
-import { signHandoff } from '@vera/handoff';
+import { signHandoff, type HandoffPayload } from '@vera/handoff';
 import { verifySunUrl, type SunVerificationResult } from './sun/index.js';
 import { getTapConfig } from './env.js';
 import { getCardFieldKeyProvider } from './key-provider.js';
@@ -13,17 +13,32 @@ import { getCardFieldKeyProvider } from './key-provider.js';
 // The handoff token IS the opaque bearer redirected to the activation frontend
 // (`/activate#hand=<token>`).  Fragment so Cloudflare logs don't capture it.
 
+export type HandoffPurpose = HandoffPayload['purpose'];
+
 export interface HandleSunTapInput {
   cardRef: string;
   /** Full URL the card emitted (scheme + host + path + query). */
   fullUrl: string;
   ip?: string;
   ua?: string;
+  /**
+   * Purpose of the minted handoff token.
+   *   - 'activation'   (default) — default SUN-tap verify → activation flow.
+   *     If the card is already ACTIVATED the handler still falls back to
+   *     'provisioning' for backwards-compatibility with the /activate URL
+   *     baked into in-field cards.
+   *   - 'provisioning' — post-activation /tap/:cardRef route; mints a token
+   *     the mobile app can exchange at activation's /api/provisioning/start.
+   *   - 'payment'      — post-provisioning tap for payment initiation.
+   */
+  purpose?: HandoffPurpose;
 }
 
 export interface HandleSunTapResult {
   /** Signed handoff token — 30 second TTL. */
   handoffToken: string;
+  /** Current card status — lets the route handler pick the right redirect. */
+  cardStatus: 'BLANK' | 'PERSONALISED' | 'ACTIVATED' | 'PROVISIONED' | 'SUSPENDED' | 'REVOKED';
 }
 
 export async function handleSunTap(input: HandleSunTapInput): Promise<HandleSunTapResult> {
@@ -85,11 +100,16 @@ export async function handleSunTap(input: HandleSunTapInput): Promise<HandleSunT
 
   const config = getTapConfig();
 
-  // Choose handoff purpose based on card status:
-  //   ACTIVATED cards → provisioning flow (mobile app)
-  //   Everything else → activation flow (WebAuthn registration)
-  const purpose: 'activation' | 'provisioning' =
-    card.status === 'ACTIVATED' ? 'provisioning' : 'activation';
+  // Purpose resolution:
+  //   - If the caller explicitly passes a purpose, honour it verbatim.  The
+  //     post-activation /tap/:cardRef route uses this to always mint
+  //     'provisioning' tokens regardless of card state.
+  //   - Otherwise (legacy /activate URL baked into in-field cards), derive
+  //     purpose from card.status: ACTIVATED cards get a provisioning token
+  //     because their next action is mobile provisioning, all other states
+  //     get an activation token.
+  const purpose: HandoffPurpose =
+    input.purpose ?? (card.status === 'ACTIVATED' ? 'provisioning' : 'activation');
 
   const handoffToken = signHandoff(
     {
@@ -102,5 +122,5 @@ export async function handleSunTap(input: HandleSunTapInput): Promise<HandleSunT
     config.TAP_HANDOFF_SECRET,
   );
 
-  return { handoffToken };
+  return { handoffToken, cardStatus: card.status };
 }

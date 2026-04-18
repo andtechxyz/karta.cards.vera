@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { prisma } from '@vera/db';
 import { badRequest, notFound } from '@vera/core';
@@ -21,11 +22,12 @@ export function createProvisioningRouter(): Router {
     const { handoffToken } = req.body as { handoffToken?: string };
     if (!handoffToken) throw badRequest('missing_token', 'handoffToken is required');
 
-    // Verify handoff token
+    // Verify handoff token — must be from tap service with provisioning purpose.
     const payload = verifyHandoff({
       token: handoffToken,
       expectedPurpose: 'provisioning',
       secretHex: config.TAP_HANDOFF_SECRET,
+      allowedIssuers: ['tap'],
     });
 
     // Look up card
@@ -36,24 +38,35 @@ export function createProvisioningRouter(): Router {
     if (!card) throw notFound('card_not_found', 'Card not found');
     if (card.status !== 'ACTIVATED') throw badRequest('invalid_status', `Card is ${card.status}, expected ACTIVATED`);
 
+    // When PALISADE_RCA_URL is unset, run in mock mode so local dev + e2e
+    // tests can exercise the full mobile provisioning flow without a real
+    // RCA backing service.  NEVER used in production — an unset
+    // PALISADE_RCA_URL in prod is a config error the operator must fix.
+    let sessionId: string;
+    let wsUrl: string;
+
     if (!config.PALISADE_RCA_URL) {
-      throw badRequest('rca_not_configured', 'PALISADE_RCA_URL is not configured');
-    }
+      const mockId = randomUUID();
+      sessionId = `mock-${mockId}`;
+      wsUrl = `ws://localhost:4000/mock-rca/${mockId}`;
+    } else {
+      // Call Palisade RCA to start provisioning
+      const rcaResp = await request(`${config.PALISADE_RCA_URL}/api/v1/provision/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          proxy_card_id: card.proxyCardId,
+          activation_token: handoffToken,
+        }),
+      });
 
-    // Call Palisade RCA to start provisioning
-    const rcaResp = await request(`${config.PALISADE_RCA_URL}/api/v1/provision/start`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        proxy_card_id: card.proxyCardId,
-        activation_token: handoffToken,
-      }),
-    });
+      if (rcaResp.statusCode >= 400) {
+        throw badRequest('rca_error', 'Failed to start provisioning session');
+      }
 
-    const rcaBody = (await rcaResp.body.json()) as { session_id: string; ws_url: string };
-
-    if (rcaResp.statusCode >= 400) {
-      throw badRequest('rca_error', 'Failed to start provisioning session');
+      const rcaBody = (await rcaResp.body.json()) as { session_id: string; ws_url: string };
+      sessionId = rcaBody.session_id;
+      wsUrl = rcaBody.ws_url;
     }
 
     // Create local provisioning session
@@ -62,7 +75,7 @@ export function createProvisioningRouter(): Router {
         cardId: card.id,
         sadRecordId: '', // Will be linked by RCA callback
         proxyCardId: card.proxyCardId ?? '',
-        rcaSessionId: rcaBody.session_id,
+        rcaSessionId: sessionId,
         phase: 'INIT',
       },
     });
@@ -77,8 +90,8 @@ export function createProvisioningRouter(): Router {
     }
 
     res.status(201).json({
-      sessionId: rcaBody.session_id,
-      wsUrl: rcaBody.ws_url,
+      sessionId,
+      wsUrl,
     });
   });
 

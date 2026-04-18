@@ -3,6 +3,7 @@ import express from 'express';
 import { errorMiddleware, authRateLimit } from '@vera/core';
 import { getTapConfig } from './env.js';
 import sunTapRouter from './routes/sun-tap.routes.js';
+import postActivationTapRouter from './routes/post-activation-tap.routes.js';
 
 const config = getTapConfig();
 const app = express();
@@ -19,7 +20,12 @@ app.get('/api/health', (_req, res) => {
 // SUN-tap — mounted at root because the URL baked into the NFC chip has
 // no /api prefix.  Rate-limit to prevent replay brute-force.
 app.use('/activate', authRateLimit);
+app.use('/tap', authRateLimit);
 app.use('/', sunTapRouter);
+// Post-activation SUN-tap — /tap/:cardRef, used by cards whose NDEF URL
+// has been rewritten after activation.  Minted handoff tokens always carry
+// purpose='provisioning' regardless of card state.
+app.use('/', postActivationTapRouter);
 
 app.use(errorMiddleware);
 

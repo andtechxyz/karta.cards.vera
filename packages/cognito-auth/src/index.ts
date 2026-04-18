@@ -98,6 +98,46 @@ export function createCognitoAuthMiddleware(config: CognitoAuthConfig): RequestH
 }
 
 // ---------------------------------------------------------------------------
+// Convenience — use env defaults
+// ---------------------------------------------------------------------------
+
+/**
+ * Convenience wrapper that pulls config from env vars.  Primary entry point
+ * for services that only need the default Karta Cognito pool:
+ *
+ *   app.use('/api/mine', requireCognitoAuth(), handler);
+ *
+ * Env vars:
+ *   COGNITO_USER_POOL_ID   (default 'ap-southeast-2_Db4d1vpIV')
+ *   COGNITO_CLIENT_ID      (default '7pj9230obhsa6h6vrvk9tru7do')
+ *   COGNITO_REGION         (default derived from pool ID prefix)
+ */
+export function requireCognitoAuth(
+  overrides?: Partial<CognitoAuthConfig>,
+): RequestHandler {
+  const userPoolId =
+    overrides?.userPoolId ??
+    process.env.COGNITO_USER_POOL_ID ??
+    'ap-southeast-2_Db4d1vpIV';
+  const clientId =
+    overrides?.clientId ??
+    process.env.COGNITO_CLIENT_ID ??
+    '7pj9230obhsa6h6vrvk9tru7do';
+  const region =
+    overrides?.region ??
+    process.env.COGNITO_REGION ??
+    userPoolId.split('_')[0] ??
+    'ap-southeast-2';
+
+  return createCognitoAuthMiddleware({
+    userPoolId,
+    clientId,
+    region,
+    ...(overrides?.requiredGroup ? { requiredGroup: overrides.requiredGroup } : {}),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
