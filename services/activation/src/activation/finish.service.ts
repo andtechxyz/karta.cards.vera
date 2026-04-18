@@ -1,29 +1,28 @@
 import { CardStatus, CredentialKind } from '@prisma/client';
-import type { RegistrationResponseJSON } from '@simplewebauthn/types';
+import type {
+  AuthenticationResponseJSON,
+  RegistrationResponseJSON,
+} from '@simplewebauthn/types';
 import { prisma } from '@vera/db';
 import { badRequest, unauthorized } from '@vera/core';
-import { verifyRegistration } from '@vera/webauthn';
+import { verifyAuthentication, verifyRegistration } from '@vera/webauthn';
 import { renderNdefUrls } from '../programs/ndef.js';
 import { getActivationConfig } from '../env.js';
 import { loadActiveSession } from './session.js';
 
-// Second leg of the activation ceremony.  Two paths:
+// Second leg of the activation ceremony.  The frontend POSTs either:
 //
-//   register mode:  Browser POSTs the AttestationResponse from
-//                   startRegistration().  We verify, insert the cred row,
-//                   flip the card to ACTIVATED.
+//   - { response: RegistrationResponseJSON }      — register mode (legacy)
+//   - { response: AuthenticationResponseJSON }    — assert mode (chip had a
+//                                                   preregistered FIDO cred)
 //
-//   confirm mode:   Browser POSTs { confirm: true }.  Card already has a
-//                   preregistered FIDO credential (loaded by perso); the
-//                   SUN-verified tap that got us here is the only proof
-//                   needed.  We just flip the card to ACTIVATED.
+// We sniff the shape (attestation vs assertion) to pick the path; no
+// explicit `mode` flag on the wire keeps the contract small.  Both paths
+// end with Card.status = ACTIVATED.
 
 export interface FinishInput {
   sessionToken: string;
-  /** Present in register mode only. */
-  response?: RegistrationResponseJSON;
-  /** Present in confirm mode only. */
-  confirm?: true;
+  response: RegistrationResponseJSON | AuthenticationResponseJSON;
   deviceLabel?: string;
 }
 
@@ -31,35 +30,34 @@ export interface FinishResult {
   cardActivated: true;
   credentialId: string;
   postActivationNdefUrl: string;
-  /** Source of the credentialId in the response — 'attestation' (register
-   *  mode) or 'preregistered' (confirm mode).  Useful for client-side
-   *  display + audit. */
-  mode: 'register' | 'confirm';
-  /**
-   * Absolute URL of the program's microsite, if the program has a microsite
-   * enabled and an active version published.  Null otherwise — the frontend
-   * falls back to its built-in success screen.
-   */
+  /** 'register' = brand-new cred; 'assert' = existing preregistered cred used. */
+  mode: 'register' | 'assert';
   micrositeUrl: string | null;
 }
 
 export async function finishActivationRegistration(input: FinishInput): Promise<FinishResult> {
   const session = await loadActiveSession(input.sessionToken);
-
-  if (input.confirm === true) {
-    return finishConfirm(session, input.deviceLabel);
+  if (!session.challenge) {
+    throw badRequest('no_pending_challenge', 'Call /begin first');
   }
   if (!input.response) {
-    throw badRequest(
-      'missing_response',
-      'Either { response } (register mode) or { confirm: true } (confirm mode) is required',
-    );
+    throw badRequest('missing_response', 'Response body is required');
   }
-  return finishRegister(session, input.response, input.deviceLabel);
+
+  // Shape-sniff: attestation has `attestationObject`, assertion has
+  // `signature` + `authenticatorData`.
+  const r = input.response as unknown as Record<string, unknown>;
+  const resp = (r.response ?? {}) as Record<string, unknown>;
+  const isAssertion = typeof resp.signature === 'string';
+
+  if (isAssertion) {
+    return finishAssert(session, input.response as AuthenticationResponseJSON, input.deviceLabel);
+  }
+  return finishRegister(session, input.response as RegistrationResponseJSON, input.deviceLabel);
 }
 
 // ---------------------------------------------------------------------------
-// register mode — original WebAuthn ceremony
+// Register path — fresh WebAuthn registration (legacy flow)
 // ---------------------------------------------------------------------------
 
 async function finishRegister(
@@ -68,7 +66,7 @@ async function finishRegister(
   deviceLabel: string | undefined,
 ): Promise<FinishResult> {
   if (!session.challenge) {
-    throw badRequest('no_pending_challenge', 'Call /begin first to issue a registration challenge');
+    throw badRequest('no_pending_challenge', 'Call /begin first');
   }
 
   const verification = await verifyRegistration({
@@ -76,7 +74,6 @@ async function finishRegister(
     expectedChallenge: session.challenge,
     requireUserVerification: false,
   });
-
   if (!verification.verified || !verification.registrationInfo) {
     throw unauthorized('registration_verify_failed', 'WebAuthn registration failed');
   }
@@ -122,39 +119,91 @@ async function finishRegister(
 }
 
 // ---------------------------------------------------------------------------
-// confirm mode — pre-registered credential, no WebAuthn ceremony at runtime
+// Assert path — preregistered credential, WebAuthn assertion with extended
+// credential ID.  Chip is expected to have processed the URL+CMAC tail via
+// its T4T applet during this ceremony.
 // ---------------------------------------------------------------------------
 
-async function finishConfirm(
+async function finishAssert(
   session: { id: string; cardId: string; challenge: string | null },
+  response: AuthenticationResponseJSON,
   deviceLabel: string | undefined,
 ): Promise<FinishResult> {
-  // Defensive: a confirm-mode finish is only valid if a preregistered cred
-  // exists for the card.  /begin already enforces this (it returns
-  // mode=confirm only when a preregistered cred is present), but the gap
-  // between /begin and /finish is unbounded — if an admin races to delete
-  // the cred between the two calls, we should refuse rather than silently
-  // ACTIVATE without any credential at all.
-  const cred = await prisma.webAuthnCredential.findFirst({
-    where: { cardId: session.cardId, preregistered: true },
-    select: { id: true, credentialId: true },
-  });
-  if (!cred) {
-    throw badRequest(
-      'no_preregistered_credential',
-      'Card has no preregistered credential — call /begin again for register mode',
-    );
+  if (!session.challenge) {
+    throw badRequest('no_pending_challenge', 'Call /begin first');
   }
 
-  const [, updatedCard] = await prisma.$transaction([
+  // The client returns the credentialId that the authenticator echoed.
+  // Some authenticators return the full extended blob; others strip the
+  // tail and return just the real credential ID.  Try both forms against
+  // our DB.
+  const returnedCredId = response.id;
+  if (!returnedCredId) {
+    throw badRequest('missing_credential_id', 'Assertion response missing credential id');
+  }
+  const returnedBytes = Buffer.from(returnedCredId, 'base64url');
+
+  // Card has at most one preregistered cred — fetch it plus any others.
+  const credentials = await prisma.webAuthnCredential.findMany({
+    where: { cardId: session.cardId },
+    select: {
+      id: true,
+      credentialId: true,
+      publicKey: true,
+      counter: true,
+      transports: true,
+      preregistered: true,
+    },
+  });
+  // Match either as-is or by stripping a tail.
+  const cred = credentials.find((c) => {
+    const stored = Buffer.from(c.credentialId, 'base64url');
+    if (stored.equals(returnedBytes)) return true;
+    if (returnedBytes.length > stored.length &&
+        returnedBytes.subarray(0, stored.length).equals(stored)) {
+      return true;
+    }
+    return false;
+  });
+  if (!cred) {
+    throw unauthorized('credential_not_found', 'Assertion credential does not match any card credential');
+  }
+
+  // @simplewebauthn's verifier expects the canonical credentialId on both
+  // sides (response.id AND authenticator.credentialID).  If the authenticator
+  // returned the extended blob, rewrite the response.id to the stored one so
+  // the library's equality check passes.  The signed authData hash is
+  // unaffected.
+  const normalizedResponse: AuthenticationResponseJSON = {
+    ...response,
+    id: cred.credentialId,
+    rawId: cred.credentialId,
+  };
+
+  const verification = await verifyAuthentication({
+    response: normalizedResponse,
+    expectedChallenge: session.challenge,
+    credential: {
+      credentialId: cred.credentialId,
+      publicKey: cred.publicKey,
+      counter: cred.counter,
+      transports: cred.transports,
+    },
+    requireUserVerification: false,
+  });
+  if (!verification.verified) {
+    throw unauthorized('assertion_verify_failed', 'WebAuthn assertion failed');
+  }
+  const newCounter = verification.authenticationInfo?.newCounter ?? Number(cred.counter);
+
+  const [, , updatedCard] = await prisma.$transaction([
     prisma.webAuthnCredential.update({
       where: { id: cred.id },
-      data: { lastUsedAt: new Date(), deviceName: deviceLabel ?? undefined },
-    }),
-    prisma.card.update({
-      where: { id: session.cardId },
-      data: { status: CardStatus.ACTIVATED },
-      select: micrositeProgramSelect,
+      data: {
+        counter: BigInt(newCounter),
+        lastUsedAt: new Date(),
+        deviceName: deviceLabel ?? undefined,
+      },
     }),
     prisma.activationSession.update({
       where: { id: session.id },
@@ -164,18 +213,23 @@ async function finishConfirm(
         challenge: null,
       },
     }),
+    prisma.card.update({
+      where: { id: session.cardId },
+      data: { status: CardStatus.ACTIVATED },
+      select: micrositeProgramSelect,
+    }),
   ]);
 
   return buildResult({
     cardRef: updatedCard.cardRef,
     credentialId: cred.credentialId,
     program: updatedCard.program,
-    mode: 'confirm',
+    mode: 'assert',
   });
 }
 
 // ---------------------------------------------------------------------------
-// Shared helpers — selectors + result builder
+// Shared helpers
 // ---------------------------------------------------------------------------
 
 const micrositeProgramSelect = {
@@ -203,7 +257,7 @@ function buildResult(input: {
   cardRef: string;
   credentialId: string;
   program: ProgramFields | null;
-  mode: 'register' | 'confirm';
+  mode: 'register' | 'assert';
 }): FinishResult {
   const config = getActivationConfig();
   const { postActivation } = renderNdefUrls({
@@ -227,3 +281,7 @@ function buildResult(input: {
     micrositeUrl,
   };
 }
+
+// Re-export to satisfy imports; finishAssert also needs the route schema
+// to accept the assertion response shape.
+export type { AuthenticationResponseJSON, RegistrationResponseJSON };

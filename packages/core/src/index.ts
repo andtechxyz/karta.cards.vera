@@ -25,3 +25,4 @@ export { EnvKeyProvider } from './key-provider.js';
 export type { KeyProvider, EnvKeyProviderInput } from './key-provider.js';
 export { serveFrontend } from './serve-frontend.js';
 export { authRateLimit, apiRateLimit } from './rate-limit.js';
+export { aesCmac } from './cmac.js';

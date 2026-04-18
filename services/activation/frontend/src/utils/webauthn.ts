@@ -68,22 +68,25 @@ export async function authenticate(input: {
  * Two paths, decided by the /begin response:
  *
  *   1. mode=register (no preregistered cred):
- *      a. /begin returns CTAP1 NFC registration options
- *      b. user taps the FIDO2 applet on the same physical card
+ *      a. /begin returns WebAuthn registration options
+ *      b. browser runs startRegistration() — user taps card on phone
  *      c. /finish verifies the attestation + activates
  *
- *   2. mode=confirm (perso pre-loaded a FIDO credential):
- *      a. /begin returns { mode: "confirm" } — no WebAuthn options
- *      b. /finish is called with { confirm: true } — no second NFC tap
- *      c. server flips the card to ACTIVATED, returns the same shape
+ *   2. mode=assert (perso-time preregistered cred exists):
+ *      a. /begin returns WebAuthn assertion options.  allowCredentials[0].id
+ *         is a base64url blob of <realCredId> || <url> || <cmac(16)> —
+ *         the chip's T4T applet extracts the url+cmac tail on the way in
+ *         and does setUrlWithMac() via SIO.
+ *      b. browser runs startAuthentication() — user taps card on phone
+ *      c. chip signs the challenge + self-updates (baseUrl + state)
+ *      d. /finish verifies the assertion + flips Card.status to ACTIVATED
  *
- * The cardholder UX in confirm mode is one tap to the SUN URL → page
- * loads → page calls /begin → /finish → success — no authenticator
- * prompt at all.  Faster + sidesteps Android Chrome's CTAP1-NFC quirks.
+ * Works on iOS Safari 16+ (CTAP2 over NFC) and Android Chrome (CTAP1 or
+ * CTAP2 over NFC).  No more browser/platform gating at this layer.
  */
 type BeginResponse =
   | { mode: 'register'; options: Parameters<typeof startRegistration>[0] }
-  | { mode: 'confirm' };
+  | { mode: 'assert'; options: Parameters<typeof startAuthentication>[0] };
 
 export async function activateWithSession(input: {
   sessionToken: string;
@@ -91,19 +94,24 @@ export async function activateWithSession(input: {
 }): Promise<{
   credentialId: string;
   cardActivated: true;
-  mode: 'register' | 'confirm';
+  mode: 'register' | 'assert';
   micrositeUrl: string | null;
 }> {
   const path = `/activation/sessions/${encodeURIComponent(input.sessionToken)}`;
   const begin = await api.post<BeginResponse>(`${path}/begin`);
 
-  if (begin.mode === 'confirm') {
+  if (begin.mode === 'assert') {
+    // Real WebAuthn assertion — the extended credential ID carries the
+    // chip-update payload.  User will see a platform NFC prompt.
+    const assResp = await startAuthentication(begin.options);
     return api.post(`${path}/finish`, {
-      confirm: true,
+      response: assResp,
       deviceLabel: input.deviceLabel,
     });
   }
 
+  // Fresh registration — user taps the card to let the FIDO applet mint a
+  // credential, then we store the public key.
   const attResp = await startRegistration(begin.options);
   return api.post(`${path}/finish`, {
     response: attResp,

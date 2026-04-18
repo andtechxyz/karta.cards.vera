@@ -1,31 +1,45 @@
-import { generateRegistrationOptions } from '@simplewebauthn/server';
-import type { PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/types';
+import {
+  generateRegistrationOptions,
+  generateAuthenticationOptions,
+} from '@simplewebauthn/server';
+import type {
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from '@simplewebauthn/types';
 import { CardStatus } from '@prisma/client';
 import { prisma } from '@vera/db';
-import { notFound, conflict } from '@vera/core';
-import { buildNfcCardRegistrationOptions } from '@vera/webauthn';
+import { notFound, conflict, internal, aesCmac, decrypt } from '@vera/core';
+import {
+  buildNfcCardRegistrationOptions,
+  buildAuthenticationOptions,
+} from '@vera/webauthn';
+import { renderNdefUrls } from '../programs/ndef.js';
+import { getCardFieldKeyProvider } from '../cards/key-provider.js';
 import { loadActiveSession } from './session.js';
 
 // First leg of the activation ceremony.
-// Browser POSTs the session token (from the handoff → begin exchange);
-// we resolve it to the Card and decide which path to take:
 //
-//   1. Card has a preregistered FIDO credential (perso scripted the FIDO
-//      applet to generate one before shipping):
-//         → return { mode: "confirm" }
-//      The frontend skips startRegistration() and POSTs to /finish with
-//      { confirm: true }.  The pre-registered cred + the SUN-verified tap
-//      together flip the card to ACTIVATED.
+// Two modes are returned depending on whether the card already carries a
+// pre-registered FIDO credential:
 //
-//   2. Card has no preregistered credential:
-//         → return { mode: "register", options }
-//      The frontend runs the WebAuthn registration ceremony as before.
-//      /finish verifies attestation, inserts the cred, flips ACTIVATED.
+//   1. Card has a preregistered credential (perso-time FIDO mint):
+//         → mode="assert"
+//      Server derives the card's post-activation URL, computes
+//      AES-CMAC(sdmFileReadKey, url), and bakes url+cmac onto the TAIL of
+//      the credential ID.  Browser passes that extended blob to the
+//      authenticator; the T4T applet inside the chip splits on the way in
+//      and uses setUrlWithMac() via SIO to rotate its own baseUrl +
+//      state.  A real WebAuthn assertion is performed; /finish verifies
+//      the signature and flips Card.status to ACTIVATED.
+//
+//   2. No preregistered credential:
+//         → mode="register"
+//      The legacy flow — frontend runs startRegistration(), /finish
+//      verifies the attestation, inserts a new WebAuthnCredential.
 
-/** Discriminated response so the frontend knows which path to take. */
 export type BeginActivationResponse =
   | { mode: 'register'; options: PublicKeyCredentialCreationOptionsJSON }
-  | { mode: 'confirm' };
+  | { mode: 'assert'; options: PublicKeyCredentialRequestOptionsJSON };
 
 export async function beginActivationRegistration(
   sessionToken: string,
@@ -35,9 +49,23 @@ export async function beginActivationRegistration(
     where: { id: session.cardId },
     select: {
       id: true,
+      cardRef: true,
       status: true,
+      sdmFileReadKeyEncrypted: true,
+      keyVersion: true,
+      program: {
+        select: {
+          preActivationNdefUrlTemplate: true,
+          postActivationNdefUrlTemplate: true,
+        },
+      },
       credentials: {
-        select: { credentialId: true, kind: true, preregistered: true },
+        select: {
+          credentialId: true,
+          kind: true,
+          preregistered: true,
+          transports: true,
+        },
       },
     },
   });
@@ -46,30 +74,79 @@ export async function beginActivationRegistration(
     throw conflict('card_already_activated', 'Card is already activated');
   }
 
-  // Confirm path — at most one preregistered cred per card (DB-enforced).
-  const hasPreregistered = card.credentials.some((c) => c.preregistered);
-  if (hasPreregistered) {
-    // Clear any stale challenge so a previously-aborted register attempt
-    // can't accidentally still verify.  No new challenge needed for confirm.
+  const preReg = card.credentials.find((c) => c.preregistered);
+
+  // -------------------------------------------------------------------------
+  // Assert path — preregistered credential exists.  Build the extended
+  // credential ID (credId || postActivationUrl || cmac) so the chip can
+  // self-update during the assertion ceremony.
+  // -------------------------------------------------------------------------
+  if (preReg) {
+    // Resolve the post-activation URL from the program template.  The
+    // applet's baseUrl is the host+path WITHOUT scheme and WITHOUT the
+    // `?e=.&m=.` query (the chip appends that itself on every tap).
+    const { postActivation: postActivationUrl } = renderNdefUrls({
+      cardRef: card.cardRef,
+      preActivationTemplate: card.program?.preActivationNdefUrlTemplate ?? null,
+      postActivationTemplate: card.program?.postActivationNdefUrlTemplate ?? null,
+    });
+    const bakedBase = stripUrlForChip(postActivationUrl);
+    const urlBytes = Buffer.from(bakedBase, 'utf8');
+
+    // Decrypt the card's sdmFileReadKey — same key the T4T applet's macKey
+    // is loaded from at install time.  Needed to compute a CMAC the applet
+    // will accept.
+    const fileReadKeyHex = decrypt(
+      {
+        ciphertext: card.sdmFileReadKeyEncrypted,
+        keyVersion: card.keyVersion,
+      },
+      getCardFieldKeyProvider(),
+    );
+    const fileReadKey = Buffer.from(fileReadKeyHex, 'hex');
+    if (fileReadKey.length !== 16) {
+      throw internal('bad_file_read_key', 'sdmFileReadKey is not 16 bytes');
+    }
+    const cmac = aesCmac(fileReadKey, urlBytes); // 16 bytes
+    fileReadKey.fill(0); // scrub
+
+    // Build the extended credential ID bytes: <realCredId> || <url> || <cmac>
+    const realCredId = Buffer.from(preReg.credentialId, 'base64url');
+    const extended = Buffer.concat([realCredId, urlBytes, cmac]);
+    const extendedB64u = extended.toString('base64url');
+
+    const opts = buildAuthenticationOptions({
+      credentials: [
+        {
+          id: extendedB64u,
+          kind: preReg.kind,
+          transports: preReg.transports,
+        },
+      ],
+    });
+    const options = await generateAuthenticationOptions(opts);
+
     await prisma.activationSession.update({
       where: { id: session.id },
-      data: { challenge: null },
+      data: { challenge: options.challenge },
     });
-    return { mode: 'confirm' };
+
+    return { mode: 'assert', options };
   }
 
-  // Register path — exclude any non-preregistered creds (avoid double-
-  // registering the same authenticator) and issue a fresh challenge.
+  // -------------------------------------------------------------------------
+  // Register path — no preregistered cred.  Fresh WebAuthn registration.
+  // -------------------------------------------------------------------------
   const excludeCredentialIds = card.credentials
     .filter((c) => c.kind === 'CROSS_PLATFORM' && !c.preregistered)
     .map((c) => c.credentialId);
 
-  const opts = buildNfcCardRegistrationOptions({
+  const regOpts = buildNfcCardRegistrationOptions({
     userHandle: card.id,
     userLabel: `card_${card.id.slice(0, 8)}`,
     excludeCredentialIds,
   });
-  const options = await generateRegistrationOptions(opts);
+  const options = await generateRegistrationOptions(regOpts);
 
   await prisma.activationSession.update({
     where: { id: session.id },
@@ -77,4 +154,20 @@ export async function beginActivationRegistration(
   });
 
   return { mode: 'register', options };
+}
+
+/**
+ * Strip `https://` and any trailing `?e=.*&m=.*` from a URL template.  The
+ * T4T applet stores the bare host+path; its URI-code prefix (0x04) adds
+ * `https://` on the wire and the SDM crypto appends `?e=<hex>&m=<hex>` on
+ * every tap.  Placeholders like `{PICCData}` / `{CMAC}` aren't meaningful
+ * here — the applet builds those itself — so we drop the whole query.
+ */
+function stripUrlForChip(url: string): string {
+  let s = url;
+  if (s.toLowerCase().startsWith('https://')) s = s.slice('https://'.length);
+  else if (s.toLowerCase().startsWith('http://')) s = s.slice('http://'.length);
+  const q = s.indexOf('?');
+  if (q >= 0) s = s.slice(0, q);
+  return s;
 }

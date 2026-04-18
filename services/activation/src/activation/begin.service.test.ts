@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// ---------------------------------------------------------------------------
-// Mocks — keep narrow to what begin.service.ts actually touches.
-// ---------------------------------------------------------------------------
-
 vi.mock('@vera/db', () => ({
   prisma: {
     card: { findUnique: vi.fn() },
@@ -16,19 +12,47 @@ vi.mock('@vera/db', () => ({
 
 vi.mock('@vera/webauthn', () => ({
   buildNfcCardRegistrationOptions: vi.fn(() => ({ rpName: 'test' })),
+  buildAuthenticationOptions: vi.fn(() => ({ rpID: 'karta.cards' })),
 }));
 
 vi.mock('@simplewebauthn/server', () => ({
   generateRegistrationOptions: vi.fn(async () => ({
-    challenge: 'CHALLENGE_BYTES',
+    challenge: 'REG_CHALLENGE',
     rp: { id: 'test', name: 'test' },
     user: { id: 'u', name: 'u', displayName: 'u' },
     pubKeyCredParams: [],
   })),
+  generateAuthenticationOptions: vi.fn(async () => ({
+    challenge: 'ASSERT_CHALLENGE',
+    rpId: 'karta.cards',
+    allowCredentials: [{ id: 'EXTENDED', type: 'public-key', transports: ['nfc'] }],
+  })),
+}));
+
+// Core: we mock decrypt and aesCmac but keep the other helpers.
+vi.mock('@vera/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@vera/core')>();
+  return {
+    ...actual,
+    decrypt: vi.fn(() => '00112233445566778899aabbccddeeff'),
+    aesCmac: vi.fn(() => Buffer.from('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'hex')),
+  };
+});
+
+vi.mock('../cards/key-provider.js', () => ({
+  getCardFieldKeyProvider: vi.fn(() => ({})),
+}));
+
+vi.mock('../programs/ndef.js', () => ({
+  renderNdefUrls: vi.fn(() => ({
+    preActivation: null,
+    postActivation: 'https://tap.karta.cards/pay/card_1?e={PICCData}&m={CMAC}',
+  })),
 }));
 
 import { prisma } from '@vera/db';
-import { generateRegistrationOptions } from '@simplewebauthn/server';
+import { generateRegistrationOptions, generateAuthenticationOptions } from '@simplewebauthn/server';
+import { buildAuthenticationOptions } from '@vera/webauthn';
 import { beginActivationRegistration } from './begin.service.js';
 
 const cardFind = () => prisma.card.findUnique as unknown as ReturnType<typeof vi.fn>;
@@ -50,84 +74,91 @@ beforeEach(() => {
 });
 
 describe('beginActivationRegistration', () => {
-  it('returns mode=register + options when no preregistered cred exists', async () => {
+  it('register mode: no preregistered cred → returns registration options', async () => {
     cardFind().mockResolvedValue({
-      id: 'card_1',
-      status: 'PERSONALISED',
+      id: 'card_1', cardRef: 'kc_1', status: 'PERSONALISED',
+      sdmFileReadKeyEncrypted: '...', keyVersion: 1,
+      program: { preActivationNdefUrlTemplate: null, postActivationNdefUrlTemplate: 'X' },
       credentials: [],
     });
 
     const r = await beginActivationRegistration('sess_1');
 
     expect(r.mode).toBe('register');
-    expect(r).toMatchObject({ mode: 'register' });
-    if (r.mode === 'register') {
-      expect(r.options.challenge).toBe('CHALLENGE_BYTES');
-    }
-    // Stashed challenge on the session.
+    expect(generateRegistrationOptions).toHaveBeenCalled();
+    expect(generateAuthenticationOptions).not.toHaveBeenCalled();
     expect(sessUpdate()).toHaveBeenCalledWith({
       where: { id: 'sess_1' },
-      data: { challenge: 'CHALLENGE_BYTES' },
+      data: { challenge: 'REG_CHALLENGE' },
     });
-    expect(generateRegistrationOptions).toHaveBeenCalled();
   });
 
-  it('returns mode=confirm + clears stale challenge when a preregistered cred exists', async () => {
+  it('assert mode: preregistered cred present → returns assertion options with extended cred ID', async () => {
+    const realCredBytes = Buffer.from('realcred', 'ascii').toString('base64url');
     cardFind().mockResolvedValue({
-      id: 'card_1',
-      status: 'PERSONALISED',
+      id: 'card_1', cardRef: 'kc_1', status: 'PERSONALISED',
+      sdmFileReadKeyEncrypted: 'enc',
+      keyVersion: 1,
+      program: {
+        preActivationNdefUrlTemplate: null,
+        postActivationNdefUrlTemplate: 'https://tap.karta.cards/pay/{cardRef}?e={PICCData}&m={CMAC}',
+      },
       credentials: [
-        { credentialId: 'AA', kind: 'CROSS_PLATFORM', preregistered: true },
+        { credentialId: realCredBytes, kind: 'CROSS_PLATFORM', preregistered: true, transports: ['nfc'] },
       ],
     });
 
     const r = await beginActivationRegistration('sess_1');
 
-    expect(r.mode).toBe('confirm');
-    // Challenge cleared, NOT generated.
-    expect(sessUpdate()).toHaveBeenCalledWith({
-      where: { id: 'sess_1' },
-      data: { challenge: null },
-    });
+    expect(r.mode).toBe('assert');
+    expect(generateAuthenticationOptions).toHaveBeenCalled();
     expect(generateRegistrationOptions).not.toHaveBeenCalled();
+
+    // buildAuthenticationOptions must have been given an extended credential ID
+    // (real bytes + url + 16-byte cmac) — verify length is at least real+url+16.
+    const opts = vi.mocked(buildAuthenticationOptions).mock.calls[0][0];
+    const extendedId = opts.credentials[0].id;
+    const extBytes = Buffer.from(extendedId, 'base64url');
+    const realBytes = Buffer.from(realCredBytes, 'base64url');
+    expect(extBytes.length).toBeGreaterThan(realBytes.length + 16);
+    // First portion equals the stored cred
+    expect(extBytes.subarray(0, realBytes.length)).toEqual(realBytes);
+    // Last 16 bytes are the (mocked) cmac
+    expect(extBytes.subarray(-16).toString('hex')).toBe('a'.repeat(32));
   });
 
-  it('excludes existing user-registered creds from registration options', async () => {
+  it('assert mode: strips https:// and ?e=... from post-activation URL before CMAC', async () => {
+    const realCredBytes = Buffer.from('realcred', 'ascii').toString('base64url');
     cardFind().mockResolvedValue({
-      id: 'card_1',
-      status: 'PERSONALISED',
+      id: 'card_1', cardRef: 'kc_1', status: 'PERSONALISED',
+      sdmFileReadKeyEncrypted: 'enc', keyVersion: 1,
+      program: {
+        preActivationNdefUrlTemplate: null,
+        postActivationNdefUrlTemplate: 'X',
+      },
       credentials: [
-        { credentialId: 'USER_CRED', kind: 'CROSS_PLATFORM', preregistered: false },
+        { credentialId: realCredBytes, kind: 'CROSS_PLATFORM', preregistered: true, transports: ['nfc'] },
       ],
     });
 
     await beginActivationRegistration('sess_1');
-
-    const buildOpts = await import('@vera/webauthn');
-    expect(buildOpts.buildNfcCardRegistrationOptions).toHaveBeenCalledWith(
-      expect.objectContaining({ excludeCredentialIds: ['USER_CRED'] }),
-    );
-  });
-
-  it('treats preregistered cred as authoritative even when other creds exist', async () => {
-    cardFind().mockResolvedValue({
-      id: 'card_1',
-      status: 'PERSONALISED',
-      credentials: [
-        { credentialId: 'OLD_USER_CRED', kind: 'CROSS_PLATFORM', preregistered: false },
-        { credentialId: 'NEW_PEREG_CRED', kind: 'CROSS_PLATFORM', preregistered: true },
-      ],
-    });
-
-    const r = await beginActivationRegistration('sess_1');
-    expect(r.mode).toBe('confirm');
+    const opts = vi.mocked(buildAuthenticationOptions).mock.calls[0][0];
+    const extBytes = Buffer.from(opts.credentials[0].id, 'base64url');
+    const realBytes = Buffer.from(realCredBytes, 'base64url');
+    // URL portion = extBytes between realBytes and the trailing 16-byte cmac.
+    const urlBytes = extBytes.subarray(realBytes.length, extBytes.length - 16);
+    const url = urlBytes.toString('utf8');
+    // Must NOT include scheme or query.
+    expect(url).not.toMatch(/^https?:\/\//);
+    expect(url).not.toContain('?');
+    expect(url).toBe('tap.karta.cards/pay/card_1');
   });
 
   it('throws when card is already activated', async () => {
     cardFind().mockResolvedValue({
-      id: 'card_1',
-      status: 'ACTIVATED',
-      credentials: [],
+      id: 'card_1', cardRef: 'kc_1', status: 'ACTIVATED',
+      sdmFileReadKeyEncrypted: '', keyVersion: 1,
+      program: null, credentials: [],
     });
     await expect(beginActivationRegistration('sess_1')).rejects.toMatchObject({
       code: 'card_already_activated',

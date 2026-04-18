@@ -1,15 +1,18 @@
 /**
- * Integration test — full pre-registered FIDO credential flow.
+ * Integration test — full preregistered-credential activation flow using the
+ * real WebAuthn assertion path (replaces the old confirm-mode short-circuit).
  *
- * Walks the new perso-time path end-to-end:
- *   1. Admin POSTs a credential against a PERSONALISED card.
- *   2. Activation /begin sees the preregistered cred, returns mode=confirm
- *      WITHOUT issuing a WebAuthn challenge.
- *   3. Activation /finish with { confirm: true } flips the card to
- *      ACTIVATED and bumps the credential's lastUsedAt.
+ * Walks:
+ *   1. Admin POSTs a preregistered credential against a PERSONALISED card.
+ *   2. Activation /begin sees the cred, returns assertion options whose
+ *      allowCredentials[0].id is the extended blob (cred || url || cmac).
+ *   3. Frontend "does WebAuthn assertion" (mocked via verifyAuthentication
+ *      returning verified=true) and POSTs the response to /finish.
+ *   4. /finish flips the card to ACTIVATED and bumps the credential's counter.
  *
- * Both routers are mounted in the same Express app and share a single
- * mocked Prisma surface — what admin writes is what activation reads.
+ * The chip-side SIO interaction (setUrlWithMac) is not exercised here —
+ * tested separately at the applet level.  This test validates the server-
+ * side contract: extended cred ID shape, assertion acceptance, state flip.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -18,13 +21,15 @@ import express, { type Express } from 'express';
 import 'express-async-errors';
 
 // ---------------------------------------------------------------------------
-// Shared Prisma mock — small in-memory store for cards + credentials.
+// In-memory store shared across routes.
 // ---------------------------------------------------------------------------
 
 interface FakeCard {
   id: string;
   cardRef: string;
   status: string;
+  sdmFileReadKeyEncrypted: string;
+  keyVersion: number;
   programId: string | null;
   program?: {
     id: string;
@@ -71,7 +76,6 @@ const mockPrisma = vi.hoisted(() => ({
       const id = where.id ?? Array.from(store.cards.values()).find((c: FakeCard) => c.cardRef === where.cardRef)?.id;
       const c = id ? store.cards.get(id) : undefined;
       if (!c) return null;
-      // For activation /begin's nested credentials select, hydrate them.
       if (select?.credentials) {
         return {
           ...c,
@@ -84,29 +88,19 @@ const mockPrisma = vi.hoisted(() => ({
       const c = store.cards.get(where.id);
       if (!c) throw new Error('card_not_found');
       Object.assign(c, data);
-      if (select) {
-        return {
-          ...c,
-          program: c.program ?? null,
-        };
-      }
-      return c;
+      return select ? { ...c, program: c.program ?? null } : c;
     }),
   },
   webAuthnCredential: {
     findFirst: vi.fn(async ({ where }: any) => {
-      const list = Array.from(store.credentials.values()) as FakeCred[];
-      return list.find((c) =>
+      return Array.from(store.credentials.values()).find((c: FakeCred) =>
         c.cardId === where.cardId
         && (where.preregistered === undefined || c.preregistered === where.preregistered),
       ) ?? null;
     }),
-    findUnique: vi.fn(async ({ where }: any) => {
-      return store.credentials.get(where.id) ?? null;
-    }),
+    findUnique: vi.fn(async ({ where }: any) => store.credentials.get(where.id) ?? null),
     findMany: vi.fn(async ({ where }: any) => {
-      const list = Array.from(store.credentials.values()) as FakeCred[];
-      return list.filter((c) => c.cardId === where.cardId);
+      return Array.from(store.credentials.values()).filter((c: FakeCred) => c.cardId === where.cardId);
     }),
     create: vi.fn(async ({ data, select }: any) => {
       const id = `cred_${store.credentials.size + 1}`;
@@ -151,66 +145,79 @@ const mockPrisma = vi.hoisted(() => ({
 
 vi.mock('@vera/db', () => ({ prisma: mockPrisma }));
 
-// Mock @vera/webauthn — we never run real attestation in this test.  The
-// preregistered path doesn't touch verifyRegistration anyway.
+// Core: decrypt returns a fake 32-hex string (16-byte key); aesCmac returns 16 zero bytes.
+vi.mock('@vera/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@vera/core')>();
+  return {
+    ...actual,
+    decrypt: vi.fn(() => '00112233445566778899aabbccddeeff'),
+    aesCmac: vi.fn(() => Buffer.alloc(16)),
+  };
+});
+
 vi.mock('@vera/webauthn', () => ({
   buildNfcCardRegistrationOptions: vi.fn(() => ({ rpName: 'test' })),
+  buildAuthenticationOptions: vi.fn((input: any) => ({
+    rpID: 'karta.cards',
+    allowCredentials: input.credentials,
+  })),
   verifyRegistration: vi.fn(),
+  verifyAuthentication: vi.fn(),
 }));
 
 vi.mock('@simplewebauthn/server', () => ({
-  generateRegistrationOptions: vi.fn(async () => ({
-    challenge: 'CHALLENGE_BYTES',
-    rp: { id: 'test', name: 'test' },
-    user: { id: 'u', name: 'u', displayName: 'u' },
-    pubKeyCredParams: [],
+  generateRegistrationOptions: vi.fn(async () => ({ challenge: 'REG_CH', rp: {}, user: {}, pubKeyCredParams: [] })),
+  generateAuthenticationOptions: vi.fn(async (opts: any) => ({
+    challenge: 'ASSERT_CH',
+    rpId: 'karta.cards',
+    allowCredentials: opts.allowCredentials,
   })),
 }));
 
-// Activation env — supply a microsite URL so finish.service can build one.
 vi.mock('../../services/activation/src/env.js', () => ({
-  getActivationConfig: vi.fn(() => ({
-    MICROSITE_CDN_URL: 'https://microsite.karta.cards',
-  })),
+  getActivationConfig: vi.fn(() => ({ MICROSITE_CDN_URL: 'https://microsite.karta.cards' })),
 }));
 
-// ---------------------------------------------------------------------------
-// Build app — mount admin cards router + activation routes router together.
-// ---------------------------------------------------------------------------
+vi.mock('../../services/activation/src/cards/key-provider.js', () => ({
+  getCardFieldKeyProvider: vi.fn(() => ({})),
+}));
 
 import { errorMiddleware } from '@vera/core';
+import { verifyAuthentication, verifyRegistration } from '@vera/webauthn';
 import adminCardsRouter from '../../services/admin/src/routes/cards.routes.js';
 import activationRouter from '../../services/activation/src/routes/activation.routes.js';
 
 function buildApp(): Express {
   const app = express();
   app.use(express.json({ limit: '64kb' }));
-  // No auth gates in the test harness — production wraps both with the
-  // appropriate middleware.  We're testing flow correctness, not authz.
   app.use('/api/cards', adminCardsRouter);
   app.use('/api/activation', activationRouter);
   app.use(errorMiddleware);
   return app;
 }
 
-// ---------------------------------------------------------------------------
-// Test data helpers
-// ---------------------------------------------------------------------------
-
 function seedCard(): FakeCard {
-  const card: FakeCard = {
+  const c: FakeCard = {
     id: 'card_1',
     cardRef: 'kc_e2e_1',
     status: 'PERSONALISED',
-    programId: null,
-    program: null,
+    sdmFileReadKeyEncrypted: 'enc_file_key',
+    keyVersion: 1,
+    programId: 'p_1',
+    program: {
+      id: 'p_1',
+      preActivationNdefUrlTemplate: null,
+      postActivationNdefUrlTemplate: 'https://tap.karta.cards/pay/{cardRef}?e={PICCData}&m={CMAC}',
+      micrositeEnabled: false,
+      micrositeActiveVersion: null,
+    },
   };
-  store.cards.set(card.id, card);
-  return card;
+  store.cards.set(c.id, c);
+  return c;
 }
 
 function seedSession(cardId: string): FakeSession {
-  const sess: FakeSession = {
+  const s: FakeSession = {
     id: 'sess_1',
     cardId,
     challenge: null,
@@ -219,111 +226,152 @@ function seedSession(cardId: string): FakeSession {
     expiresAt: new Date(Date.now() + 60_000),
     createdAt: new Date(),
   };
-  store.sessions.set(sess.id, sess);
-  return sess;
+  store.sessions.set(s.id, s);
+  return s;
 }
+
+beforeEach(() => {
+  store.cards.clear();
+  store.credentials.clear();
+  store.sessions.clear();
+  vi.mocked(verifyAuthentication).mockReset();
+  vi.mocked(verifyRegistration).mockReset();
+});
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('Pre-registered FIDO credential — full activation flow', () => {
-  let app: Express;
-
-  beforeEach(() => {
-    store.cards.clear();
-    store.credentials.clear();
-    store.sessions.clear();
-    app = buildApp();
-  });
-
-  it('happy path: inject cred → /begin returns confirm → /finish flips ACTIVATED', async () => {
+describe('Preregistered FIDO credential — full assertion flow', () => {
+  it('happy path: inject cred → /begin returns assert + extended id → /finish ACTIVATED', async () => {
     const card = seedCard();
     const sess = seedSession(card.id);
+    const app = buildApp();
 
     // 1. Admin pre-registers a credential.
+    const realCredId = 'realcredentialbytes';
+    const realCredB64u = Buffer.from(realCredId, 'ascii').toString('base64url');
     const inject = await request(app)
       .post(`/api/cards/${card.cardRef}/credentials`)
       .send({
-        credentialId: 'AAECAwQFBgcICQoLDA0ODw',
+        credentialId: realCredB64u,
         publicKey: 'pAEDAzkBACBYIBfgEHRkBQ-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         transports: ['nfc'],
-        deviceName: 'Pre-registered (perso)',
+        deviceName: 'E2E perso',
       });
     expect(inject.status).toBe(201);
-    expect(store.credentials.size).toBe(1);
 
-    // 2. Activation /begin sees the preregistered cred, returns confirm mode.
+    // 2. /begin returns assert mode with an extended credential ID.
     const begin = await request(app).post(`/api/activation/sessions/${sess.id}/begin`);
     expect(begin.status).toBe(200);
-    expect(begin.body).toEqual({ mode: 'confirm' });
-    // No challenge issued → still null on session.
-    expect(store.sessions.get(sess.id)!.challenge).toBeNull();
+    expect(begin.body.mode).toBe('assert');
+    const extendedId = begin.body.options.allowCredentials[0].id;
+    const extendedBytes = Buffer.from(extendedId, 'base64url');
+    const realBytes = Buffer.from(realCredB64u, 'base64url');
+    // Extended ID starts with the real cred bytes, then url, then 16-byte cmac.
+    expect(extendedBytes.subarray(0, realBytes.length)).toEqual(realBytes);
+    expect(extendedBytes.length).toBeGreaterThan(realBytes.length + 16);
 
-    // 3. Activation /finish with { confirm: true } flips ACTIVATED.
+    // Challenge stashed on session.
+    expect(store.sessions.get(sess.id)!.challenge).toBe('ASSERT_CH');
+
+    // 3. /finish with an assertion response — verifyAuthentication returns verified.
+    vi.mocked(verifyAuthentication).mockResolvedValueOnce({
+      verified: true,
+      authenticationInfo: { newCounter: 5 },
+    } as any);
+
     const finish = await request(app)
       .post(`/api/activation/sessions/${sess.id}/finish`)
-      .send({ confirm: true, deviceLabel: 'Pixel 8' });
+      .send({
+        response: {
+          id: realCredB64u,
+          rawId: realCredB64u,
+          response: {
+            authenticatorData: 'AD',
+            clientDataJSON: 'CD',
+            signature: 'SIG',
+            userHandle: null,
+          },
+          type: 'public-key',
+          clientExtensionResults: {},
+        },
+        deviceLabel: 'Pixel 9',
+      });
+
     expect(finish.status).toBe(200);
     expect(finish.body.cardActivated).toBe(true);
-    expect(finish.body.mode).toBe('confirm');
-    expect(finish.body.credentialId).toBe('AAECAwQFBgcICQoLDA0ODw');
+    expect(finish.body.mode).toBe('assert');
 
-    // Card row reflects ACTIVATED.
+    // Card is ACTIVATED in the store.
     expect(store.cards.get(card.id)!.status).toBe('ACTIVATED');
     // Session consumed.
     expect(store.sessions.get(sess.id)!.consumedAt).not.toBeNull();
-    // Credential lastUsedAt bumped.
+    // Credential counter advanced.
     const cred = Array.from(store.credentials.values())[0] as FakeCred;
+    expect(cred.counter).toBe(BigInt(5));
     expect(cred.lastUsedAt).not.toBeNull();
   });
 
   it('register mode is preserved when no preregistered cred exists', async () => {
     const card = seedCard();
     const sess = seedSession(card.id);
+    const app = buildApp();
 
     const begin = await request(app).post(`/api/activation/sessions/${sess.id}/begin`);
     expect(begin.status).toBe(200);
     expect(begin.body.mode).toBe('register');
-    expect(begin.body.options.challenge).toBe('CHALLENGE_BYTES');
-    // Challenge stashed for later /finish verification.
-    expect(store.sessions.get(sess.id)!.challenge).toBe('CHALLENGE_BYTES');
+    expect(begin.body.options.challenge).toBe('REG_CH');
+    expect(store.sessions.get(sess.id)!.challenge).toBe('REG_CH');
   });
 
-  it('refuses confirm-mode finish if admin DELETEd the cred between /begin and /finish', async () => {
+  it('accepts the extended credential ID echoed back by the authenticator', async () => {
     const card = seedCard();
     const sess = seedSession(card.id);
+    const app = buildApp();
 
-    // Inject + /begin — confirms preregistered exists.
+    const realCredId = 'realx';
+    const realCredB64u = Buffer.from(realCredId, 'ascii').toString('base64url');
     await request(app)
       .post(`/api/cards/${card.cardRef}/credentials`)
       .send({
-        credentialId: 'AAECAwQFBgcICQoLDA0ODw',
+        credentialId: realCredB64u,
         publicKey: 'pAEDAzkBACBYIBfgEHRkBQ-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       });
-    const begin = await request(app).post(`/api/activation/sessions/${sess.id}/begin`);
-    expect(begin.body.mode).toBe('confirm');
+    await request(app).post(`/api/activation/sessions/${sess.id}/begin`);
 
-    // Admin races a DELETE before /finish lands.
-    const credRow = Array.from(store.credentials.values())[0] as FakeCred;
-    const del = await request(app)
-      .delete(`/api/cards/${card.cardRef}/credentials/${credRow.id}`);
-    expect(del.status).toBe(204);
+    // Authenticator returns the FULL extended blob (realCred || url || cmac).
+    const realBytes = Buffer.from(realCredB64u, 'base64url');
+    const extBytes = Buffer.concat([realBytes, Buffer.from('tap.karta.cards/pay/kc_e2e_1'), Buffer.alloc(16)]);
+    const returned = extBytes.toString('base64url');
 
-    // /finish should now refuse rather than silently ACTIVATE without a cred.
+    vi.mocked(verifyAuthentication).mockResolvedValueOnce({
+      verified: true,
+      authenticationInfo: { newCounter: 1 },
+    } as any);
+
     const finish = await request(app)
       .post(`/api/activation/sessions/${sess.id}/finish`)
-      .send({ confirm: true });
-    expect(finish.status).toBe(400);
-    expect(finish.body.error.code).toBe('no_preregistered_credential');
-    // Card should NOT have flipped to ACTIVATED.
-    expect(store.cards.get(card.id)!.status).toBe('PERSONALISED');
+      .send({
+        response: {
+          id: returned, rawId: returned,
+          response: { authenticatorData: 'AD', clientDataJSON: 'CD', signature: 'SIG', userHandle: null },
+          type: 'public-key', clientExtensionResults: {},
+        },
+      });
+    expect(finish.status).toBe(200);
+    expect(finish.body.mode).toBe('assert');
+    expect(store.cards.get(card.id)!.status).toBe('ACTIVATED');
+
+    // verifyAuthentication was called with a normalized id (the real stored one).
+    const verifyArgs = vi.mocked(verifyAuthentication).mock.calls[0][0];
+    expect(verifyArgs.response.id).toBe(realCredB64u);
   });
 
   it('rejects pre-registration after card is ACTIVATED', async () => {
     const card = seedCard();
     card.status = 'ACTIVATED';
-
+    const app = buildApp();
     const inject = await request(app)
       .post(`/api/cards/${card.cardRef}/credentials`)
       .send({
@@ -332,29 +380,5 @@ describe('Pre-registered FIDO credential — full activation flow', () => {
       });
     expect(inject.status).toBe(409);
     expect(inject.body.error.code).toBe('card_not_personalised');
-  });
-
-  it('rejects { response } in confirm mode (and vice versa) — schema enforces XOR', async () => {
-    const card = seedCard();
-    const sess = seedSession(card.id);
-    await request(app)
-      .post(`/api/cards/${card.cardRef}/credentials`)
-      .send({
-        credentialId: 'AAECAwQFBgcICQoLDA0ODw',
-        publicKey: 'pAEDAzkBACBYIBfgEHRkBQ-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-      });
-    await request(app).post(`/api/activation/sessions/${sess.id}/begin`);
-
-    // Sending BOTH response and confirm:true → 400 (schema refine).
-    const both = await request(app)
-      .post(`/api/activation/sessions/${sess.id}/finish`)
-      .send({ confirm: true, response: { fake: true } });
-    expect(both.status).toBe(400);
-
-    // Sending NEITHER → 400 (schema refine).
-    const neither = await request(app)
-      .post(`/api/activation/sessions/${sess.id}/finish`)
-      .send({});
-    expect(neither.status).toBe(400);
   });
 });

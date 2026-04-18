@@ -11,7 +11,6 @@ const router: Router = Router();
 
 // POST /api/activation/handoff
 //   Frontend extracts #hand=<token> from URL fragment, POSTs here.
-//   Returns a server-side sessionToken the frontend then uses for begin/finish.
 const handoffSchema = z.object({
   token: z.string().min(1),
 });
@@ -33,21 +32,13 @@ router.post('/sessions/:token/begin', async (req, res) => {
 
 // POST /api/activation/sessions/:token/finish
 //
-// Accepts either:
-//   { response: <AttestationResponseJSON>, deviceLabel? } — register mode
-//   { confirm: true, deviceLabel? }                       — confirm mode
-//
-// Exactly one of response / confirm must be present; refine() enforces that
-// rather than letting the service handler discover the mismatch later.
-const finishSchema = z
-  .object({
-    response: z.unknown().optional(),
-    confirm: z.literal(true).optional(),
-    deviceLabel: z.string().max(128).optional(),
-  })
-  .refine((b) => (b.response !== undefined) !== (b.confirm === true), {
-    message: 'exactly one of { response } (register) or { confirm: true } must be supplied',
-  });
+// Accepts either a RegistrationResponseJSON (register mode) or an
+// AuthenticationResponseJSON (assert mode).  The finish service
+// distinguishes by looking for the `signature` field on the inner response.
+const finishSchema = z.object({
+  response: z.unknown(),
+  deviceLabel: z.string().max(128).optional(),
+});
 
 router.post('/sessions/:token/finish', validateBody(finishSchema), async (req, res) => {
   const body = req.body as z.infer<typeof finishSchema>;
@@ -55,7 +46,6 @@ router.post('/sessions/:token/finish', validateBody(finishSchema), async (req, r
     sessionToken: req.params.token,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     response: body.response as any,
-    confirm: body.confirm,
     deviceLabel: body.deviceLabel,
   });
   res.json(result);
