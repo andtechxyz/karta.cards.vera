@@ -200,7 +200,7 @@ function seedCard(): FakeCard {
   const c: FakeCard = {
     id: 'card_1',
     cardRef: 'kc_e2e_1',
-    status: 'PERSONALISED',
+    status: 'SHIPPED',
     sdmFileReadKeyEncrypted: 'enc_file_key',
     keyVersion: 1,
     programId: 'p_1',
@@ -379,6 +379,6 @@ describe('Preregistered FIDO credential — full assertion flow', () => {
         publicKey: 'pAEDAzkBACBYIBfgEHRkBQ-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       });
     expect(inject.status).toBe(409);
-    expect(inject.body.error.code).toBe('card_not_personalised');
+    expect(inject.body.error.code).toBe('card_not_shipped');
   });
 });

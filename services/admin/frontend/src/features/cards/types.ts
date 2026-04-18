@@ -11,7 +11,7 @@ export interface ActivationSessionRow {
 export interface Card {
   id: string;
   cardRef: string;
-  status: 'BLANK' | 'PERSONALISED' | 'ACTIVATED' | 'PROVISIONED' | 'SUSPENDED' | 'REVOKED';
+  status: 'BLANK' | 'SHIPPED' | 'PERSONALISED' | 'ACTIVATED' | 'PROVISIONED' | 'SUSPENDED' | 'REVOKED';
   retailSaleStatus: 'SHIPPED' | 'SOLD' | null;
   retailSoldAt: string | null;
   chipSerial: string | null;

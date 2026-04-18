@@ -44,7 +44,7 @@ export function CardCredentialsPanel({
   }, [reload]);
 
   const hasPreregistered = creds.some((c) => c.preregistered);
-  const canPreregister = cardStatus === 'PERSONALISED' && !hasPreregistered;
+  const canPreregister = cardStatus === 'SHIPPED' && !hasPreregistered;
 
   return (
     <div>
@@ -119,7 +119,7 @@ export function CardCredentialsPanel({
         </p>
       ) : (
         <p className="small">
-          Card is <code>{cardStatus}</code> — pre-registration is only valid in <code>PERSONALISED</code>.
+          Card is <code>{cardStatus}</code> — pre-registration is only valid in <code>SHIPPED</code>.
         </p>
       )}
     </div>

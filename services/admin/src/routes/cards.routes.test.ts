@@ -108,7 +108,7 @@ describe('POST /:cardRef/credentials', () => {
   };
 
   it('creates a preregistered credential and returns 201', async () => {
-    cardFindUnique().mockResolvedValueOnce({ id: 'card_1', status: 'PERSONALISED' });
+    cardFindUnique().mockResolvedValueOnce({ id: 'card_1', status: 'SHIPPED' });
     credFindFirst().mockResolvedValueOnce(null);
     credCreate().mockResolvedValueOnce({
       id: 'cred_1',
@@ -139,15 +139,15 @@ describe('POST /:cardRef/credentials', () => {
     expect(res.body.error.code).toBe('card_not_found');
   });
 
-  it('rejects when card is not PERSONALISED (409)', async () => {
+  it('rejects when card is not SHIPPED (409)', async () => {
     cardFindUnique().mockResolvedValueOnce({ id: 'card_1', status: 'ACTIVATED' });
     const res = await inject(buildApp(), 'POST', '/api/cards/abc/credentials', VALID_BODY);
     expect(res.status).toBe(409);
-    expect(res.body.error.code).toBe('card_not_personalised');
+    expect(res.body.error.code).toBe('card_not_shipped');
   });
 
   it('rejects double pre-registration (409)', async () => {
-    cardFindUnique().mockResolvedValueOnce({ id: 'card_1', status: 'PERSONALISED' });
+    cardFindUnique().mockResolvedValueOnce({ id: 'card_1', status: 'SHIPPED' });
     credFindFirst().mockResolvedValueOnce({ id: 'existing_cred' });
     const res = await inject(buildApp(), 'POST', '/api/cards/abc/credentials', VALID_BODY);
     expect(res.status).toBe(409);
@@ -155,7 +155,7 @@ describe('POST /:cardRef/credentials', () => {
   });
 
   it('translates Prisma P2002 to credential_id_taken (409)', async () => {
-    cardFindUnique().mockResolvedValueOnce({ id: 'card_1', status: 'PERSONALISED' });
+    cardFindUnique().mockResolvedValueOnce({ id: 'card_1', status: 'SHIPPED' });
     credFindFirst().mockResolvedValueOnce(null);
     const { Prisma } = await import('@prisma/client');
     credCreate().mockRejectedValueOnce(

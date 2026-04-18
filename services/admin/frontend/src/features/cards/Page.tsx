@@ -89,7 +89,7 @@ export function CardsPage() {
     },
   ];
 
-  const statusOptions = ['BLANK', 'PERSONALISED', 'ACTIVATED', 'PROVISIONED', 'SUSPENDED', 'REVOKED'];
+  const statusOptions = ['BLANK', 'SHIPPED', 'PERSONALISED', 'ACTIVATED', 'PROVISIONED', 'SUSPENDED', 'REVOKED'];
 
   return (
     <div className="panel">

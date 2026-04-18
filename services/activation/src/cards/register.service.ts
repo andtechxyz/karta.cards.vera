@@ -8,7 +8,7 @@ import { fingerprintUid } from './fingerprint.js';
 import { getCardFieldKeyProvider } from './key-provider.js';
 
 // Card registration — entry point for Palisade's provisioning-agent.
-// Lands a Card in PERSONALISED with a linked VaultEntry; first cardholder
+// Lands a Card in SHIPPED with a linked VaultEntry; first cardholder
 // SUN-tap (separate flow) flips it to ACTIVATED and registers the passkey.
 //
 // PANs go over HTTP to the vault service (never persisted directly from
@@ -138,7 +138,7 @@ export async function registerCard(input: RegisterCardInput): Promise<RegisterCa
   const card = await prisma.card.create({
     data: {
       cardRef: input.cardRef,
-      status: CardStatus.PERSONALISED,
+      status: CardStatus.SHIPPED,
       uidEncrypted: uidEnc.ciphertext,
       uidFingerprint,
       chipSerial: input.chipSerial,

@@ -176,7 +176,7 @@ describe('GET /api/cards/mine', () => {
       {
         id: 'card_2',
         cardRef: 'ref_2',
-        status: 'PERSONALISED',
+        status: 'SHIPPED',
         vaultEntry: null,
         program: null,
         credentials: [],

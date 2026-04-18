@@ -195,7 +195,7 @@ describe('POST /api/provisioning/start', () => {
     vi.mocked(cardFindUnique()).mockResolvedValue({
       id: 'card_1',
       cardRef: 'ref_1',
-      status: 'PERSONALISED',
+      status: 'SHIPPED',
       proxyCardId: 'proxy_1',
       cognitoSub: null,
     } as never);

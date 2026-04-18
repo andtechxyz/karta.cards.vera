@@ -295,9 +295,12 @@ model Program {
 
 enum CardStatus {
   BLANK // placeholder — JCOP not yet personalised (rare in prototype)
-  PERSONALISED // SDM keys + applets written; awaiting first cardholder tap
-  ACTIVATED // SUN-tap verified + passkey registered against the card
-  PROVISIONED // EMV payment credentials loaded onto chip via split-authority perso
+  SHIPPED // applets + SDM keys loaded at perso; card registered + ready to tap
+  PERSONALISED // EMV data (SAD, iCVV, MKAC/SMI/SMC) written to the chip by the
+  // provisioning agent via APDU.  Happens AFTER ACTIVATED in the mobile app
+  // provisioning flow — NOT the initial state.
+  ACTIVATED // SUN-tap verified + WebAuthn ceremony completed
+  PROVISIONED // Provisioning session closed; card fully ready for payments
   SUSPENDED
   REVOKED
 }
@@ -308,7 +311,7 @@ model Card {
   // (`/activate/:cardRef?e=...&m=...`).  Generated server-side at
   // `POST /api/cards/register` time; not derived from any card-side material.
   cardRef String     @unique
-  status  CardStatus @default(PERSONALISED)
+  status  CardStatus @default(SHIPPED)
 
   // --- PICC UID (NEVER plaintext on any HTTP boundary) ---------------------
   // AES-256-GCM ciphertext of the 7-byte PICC UID.  Decrypt is gated by the

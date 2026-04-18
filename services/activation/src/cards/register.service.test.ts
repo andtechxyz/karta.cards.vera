@@ -113,7 +113,7 @@ describe('registerCard — conflict checks (fail before vault writes)', () => {
     vi.mocked(createCard()).mockResolvedValue({
       id: 'card_new',
       cardRef: VALID_INPUT.cardRef,
-      status: CardStatus.PERSONALISED,
+      status: CardStatus.SHIPPED,
     } as never);
 
     await registerCard(VALID_INPUT);
@@ -131,7 +131,7 @@ describe('registerCard — happy path', () => {
     vi.mocked(createCard()).mockResolvedValue({
       id: 'card_new',
       cardRef: VALID_INPUT.cardRef,
-      status: CardStatus.PERSONALISED,
+      status: CardStatus.SHIPPED,
     } as never);
 
     await registerCard({ ...VALID_INPUT, ip: '1.2.3.4', ua: 'test-agent' });
@@ -157,7 +157,7 @@ describe('registerCard — happy path', () => {
     vi.mocked(createCard()).mockResolvedValue({
       id: 'card_new',
       cardRef: VALID_INPUT.cardRef,
-      status: CardStatus.PERSONALISED,
+      status: CardStatus.SHIPPED,
     } as never);
 
     await registerCard(VALID_INPUT);
@@ -169,12 +169,12 @@ describe('registerCard — happy path', () => {
     expect(plaintexts).toContain(VALID_INPUT.sdmFileReadKey.toLowerCase());
   });
 
-  it('creates a PERSONALISED Card linked to the vault entry', async () => {
+  it('creates a SHIPPED Card linked to the vault entry', async () => {
     vi.mocked(findCard()).mockResolvedValue(null);
     vi.mocked(createCard()).mockResolvedValue({
       id: 'card_new',
       cardRef: VALID_INPUT.cardRef,
-      status: CardStatus.PERSONALISED,
+      status: CardStatus.SHIPPED,
     } as never);
 
     const result = await registerCard(VALID_INPUT);
@@ -182,14 +182,14 @@ describe('registerCard — happy path', () => {
     expect(result).toEqual({
       cardId: 'card_new',
       cardRef: VALID_INPUT.cardRef,
-      status: CardStatus.PERSONALISED,
+      status: CardStatus.SHIPPED,
       vaultEntryId: 've_1',
       panLast4: '4242',
     });
 
     const data = vi.mocked(createCard()).mock.calls[0]![0]!.data as Record<string, unknown>;
     expect(data.cardRef).toBe(VALID_INPUT.cardRef);
-    expect(data.status).toBe(CardStatus.PERSONALISED);
+    expect(data.status).toBe(CardStatus.SHIPPED);
     expect(data.vaultEntryId).toBe('ve_1');
     expect(data.uidEncrypted).toBe(`enc(${VALID_INPUT.uid.toLowerCase()})`);
     expect(data.sdmMetaReadKeyEncrypted).toBe(`enc(${VALID_INPUT.sdmMetaReadKey.toLowerCase()})`);

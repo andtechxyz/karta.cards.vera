@@ -131,10 +131,14 @@ router.post(
       select: { id: true, status: true },
     });
     if (!card) throw notFound('card_not_found', `Card ${cardRef} not found`);
-    if (card.status !== 'PERSONALISED') {
+    // Pre-registration only makes sense before the user has activated the
+    // card.  SHIPPED is the normal case (fresh register); PERSONALISED
+    // means the provisioning agent has already loaded EMV data, so the
+    // user has either already activated or we're racing with that flow.
+    if (card.status !== 'SHIPPED') {
       throw conflict(
-        'card_not_personalised',
-        `Card is ${card.status} — pre-registration only valid in PERSONALISED state`,
+        'card_not_shipped',
+        `Card is ${card.status} — pre-registration only valid in SHIPPED state`,
       );
     }
 

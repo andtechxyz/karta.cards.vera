@@ -76,7 +76,7 @@ beforeEach(() => {
 describe('beginActivationRegistration', () => {
   it('register mode: no preregistered cred → returns registration options', async () => {
     cardFind().mockResolvedValue({
-      id: 'card_1', cardRef: 'kc_1', status: 'PERSONALISED',
+      id: 'card_1', cardRef: 'kc_1', status: 'SHIPPED',
       sdmFileReadKeyEncrypted: '...', keyVersion: 1,
       program: { preActivationNdefUrlTemplate: null, postActivationNdefUrlTemplate: 'X' },
       credentials: [],
@@ -96,7 +96,7 @@ describe('beginActivationRegistration', () => {
   it('assert mode: preregistered cred present → returns assertion options with extended cred ID', async () => {
     const realCredBytes = Buffer.from('realcred', 'ascii').toString('base64url');
     cardFind().mockResolvedValue({
-      id: 'card_1', cardRef: 'kc_1', status: 'PERSONALISED',
+      id: 'card_1', cardRef: 'kc_1', status: 'SHIPPED',
       sdmFileReadKeyEncrypted: 'enc',
       keyVersion: 1,
       program: {
@@ -130,7 +130,7 @@ describe('beginActivationRegistration', () => {
   it('assert mode: strips https:// and ?e=... from post-activation URL before CMAC', async () => {
     const realCredBytes = Buffer.from('realcred', 'ascii').toString('base64url');
     cardFind().mockResolvedValue({
-      id: 'card_1', cardRef: 'kc_1', status: 'PERSONALISED',
+      id: 'card_1', cardRef: 'kc_1', status: 'SHIPPED',
       sdmFileReadKeyEncrypted: 'enc', keyVersion: 1,
       program: {
         preActivationNdefUrlTemplate: null,
