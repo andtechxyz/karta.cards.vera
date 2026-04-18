@@ -165,6 +165,13 @@ export function requireSignedRequest(opts: RequireSignedRequestOptions): Request
   return (req: Request, res: Response, next: NextFunction) => {
     try {
       const body = (req as RequestWithRawBody).rawBody ?? Buffer.alloc(0);
+      // DEBUG: prove the middleware ran for this request.
+      console.error('[service-auth DEBUG entry]', JSON.stringify({
+        method: req.method, url: req.originalUrl,
+        hasRawBody: !!(req as RequestWithRawBody).rawBody,
+        rawBodyLen: (req as RequestWithRawBody).rawBody?.length ?? 0,
+        keys: Object.keys(opts.keys),
+      }));
       const { keyId } = verifyRequest({
         authorization: req.get('authorization') ?? undefined,
         method: req.method,
