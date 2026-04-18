@@ -1255,16 +1255,67 @@ if [ ${#PLACEHOLDER_SECRETS[@]} -gt 0 ]; then
   echo ""
 fi
 
+# ===========================================================================
+echo ""
+echo "============================================================"
+echo " 7. ECS SECURITY GROUP — INBOUND RULES"
+echo "============================================================"
+# ===========================================================================
+
+INTERNAL_ALB_SG=$(aws elbv2 describe-load-balancers \
+  --names vera-internal --region "$REGION" \
+  --query 'LoadBalancers[0].SecurityGroups[0]' --output text 2>/dev/null || true)
+
+ensure_sg_ingress() {
+  # Idempotent — adds an inbound rule on $ECS_SG for $port from $src_sg.
+  local port="$1" src_sg="$2" desc="$3"
+  local exists
+  exists=$(aws ec2 describe-security-groups --region "$REGION" --group-ids "$ECS_SG" \
+    --query "SecurityGroups[0].IpPermissions[?FromPort==\`$port\` && contains(UserIdGroupPairs[].GroupId, \`$src_sg\`)].IpProtocol" \
+    --output text 2>/dev/null)
+  if [ -n "$exists" ]; then
+    echo "  [exists] $ECS_SG inbound :$port from $src_sg"
+  else
+    aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$ECS_SG" \
+      --ip-permissions "IpProtocol=tcp,FromPort=$port,ToPort=$port,UserIdGroupPairs=[{GroupId=$src_sg,Description=$desc}]" \
+      --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text >/dev/null
+    echo "  [added] $ECS_SG :$port from $src_sg ($desc)"
+  fi
+}
+
+if [ -n "$INTERNAL_ALB_SG" ] && [ "$INTERNAL_ALB_SG" != "None" ]; then
+  ensure_sg_ingress 3004 "$INTERNAL_ALB_SG" "internal-alb-vault"
+  ensure_sg_ingress 3006 "$INTERNAL_ALB_SG" "internal-alb-data-prep"
+  ensure_sg_ingress 3007 "$INTERNAL_ALB_SG" "internal-alb-rca"
+fi
+
+# SFTP via NLB — preserves source IP, no SG hop.
+EXISTING_SFTP=$(aws ec2 describe-security-groups --region "$REGION" --group-ids "$ECS_SG" \
+  --query "SecurityGroups[0].IpPermissions[?FromPort==\`22\`].IpProtocol" --output text)
+if [ -z "$EXISTING_SFTP" ]; then
+  aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$ECS_SG" \
+    --ip-permissions 'IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=0.0.0.0/0,Description="SFTP via NLB"}]' \
+    --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text >/dev/null
+  echo "  [added] $ECS_SG :22 from 0.0.0.0/0 (SFTP via NLB)"
+else
+  echo "  [exists] $ECS_SG inbound :22"
+fi
+
+echo ""
 echo "============================================================"
 echo " OTHER MANUAL STEPS"
 echo "============================================================"
 echo ""
-echo "1. Ensure the ECS security group ($ECS_SG) allows:"
+echo "1. Verify the ECS security group ($ECS_SG) allows:"
 echo "   - Inbound from the public ALB SG on ports 3001-3003, 3005"
-echo "   - Inbound from the internal ALB SG on port 3004"
+echo "     (existing manual rules — not managed by this script)"
+echo "   - Inbound from the internal ALB SG on ports 3004, 3006, 3007"
+echo "     (managed by step 7 above — idempotent)"
+echo "   - Inbound TCP:22 from 0.0.0.0/0 for SFTP"
+echo "     (managed by step 7 above — idempotent)"
 echo "   - Outbound to the internet (for ECR image pulls and Secrets Manager)"
 echo ""
-echo "2. Ensure the internal ALB SG allows inbound from $ECS_SG on port 3004"
+echo "2. Ensure the internal ALB SG allows inbound from $ECS_SG on ports 3004, 3006, 3007"
 echo ""
 echo "3. Ensure DNS records point to the public ALB:"
 echo "   - tap.karta.cards        -> $(echo "$PUBLIC_ALB_ARN" | sed 's/.*\///')"
