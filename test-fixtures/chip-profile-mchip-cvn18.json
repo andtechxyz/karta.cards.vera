@@ -1,0 +1,84 @@
+{
+  "profileId": "mchip-advance-cvn18-test",
+  "profileName": "M/Chip Advance CVN 18 (E2E test)",
+  "scheme": "mchip_advance",
+  "appletVendor": "nxp",
+  "cvn": 18,
+
+  "elfAid": "A0000000041010",
+  "moduleAid": "A0000000041010",
+  "paAid": "D276000085504100",
+  "fidoAid": "A0000006472F0001",
+
+  "iccPrivateKeyDgi": 32769,
+  "iccPrivateKeyTag": 40776,
+  "mkAcDgi": 2048,
+  "mkSmiDgi": 2049,
+  "mkSmcDgi": 2050,
+
+  "dgiDefinitions": [
+    {
+      "dgiNumber": 32513,
+      "name": "Application FCI",
+      "tags": [80, 16720, 40706, 40712, 40720, 36],
+      "mandatory": true,
+      "source": "per_profile"
+    },
+    {
+      "dgiNumber": 36864,
+      "name": "Static Application Data",
+      "tags": [130, 148, 40711, 40706, 40712, 90, 24364, 24368],
+      "mandatory": true,
+      "source": "per_card"
+    },
+    {
+      "dgiNumber": 36865,
+      "name": "Card Risk Management Object 1",
+      "tags": [40733, 40734, 40719, 40717, 40718, 40729, 40724, 40725],
+      "mandatory": true,
+      "source": "per_profile"
+    },
+    {
+      "dgiNumber": 2048,
+      "name": "MK-AC (Issuer Master Key — Application Cryptogram)",
+      "tags": [],
+      "mandatory": true,
+      "source": "per_card"
+    },
+    {
+      "dgiNumber": 2049,
+      "name": "MK-SMI (Issuer Master Key — Secure Messaging Integrity)",
+      "tags": [],
+      "mandatory": true,
+      "source": "per_card"
+    },
+    {
+      "dgiNumber": 2050,
+      "name": "MK-SMC (Issuer Master Key — Secure Messaging Confidentiality)",
+      "tags": [],
+      "mandatory": true,
+      "source": "per_card"
+    },
+    {
+      "dgiNumber": 32769,
+      "name": "ICC Private Key",
+      "tags": [40776],
+      "mandatory": true,
+      "source": "per_card"
+    },
+    {
+      "dgiNumber": 36873,
+      "name": "PIN Try Counter",
+      "tags": [40711],
+      "mandatory": false,
+      "source": "per_profile"
+    }
+  ],
+
+  "_notes": [
+    "TEST FIXTURE — not a real production chip profile.  Do not deploy.",
+    "Tag numbers shown in decimal: convert to BER-TLV via Number.toString(16).",
+    "MK-* DGIs are populated per-card by data-prep using AWS Payment Cryptography.",
+    "DGI 36864 is the SAD payload — Track 2, AIP, AFL, Issuer PK cert chain."
+  ]
+}

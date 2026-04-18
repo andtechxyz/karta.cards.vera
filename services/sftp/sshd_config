@@ -9,13 +9,15 @@ Protocol 2
 HostKey /etc/ssh/ssh_host_ed25519_key
 HostKey /etc/ssh/ssh_host_rsa_key
 
-# Disable everything a shell user would want.
+# Disable everything a shell user would want.  UsePAM is intentionally
+# omitted — Alpine's BusyBox-derived OpenSSH build doesn't include PAM
+# support, and emitting `UsePAM` (no or yes) makes sshd refuse to start.
+# Pubkey-only is enforced via PasswordAuthentication=no below.
 PermitRootLogin no
 PasswordAuthentication no
 ChallengeResponseAuthentication no
 KbdInteractiveAuthentication no
 PermitEmptyPasswords no
-UsePAM no
 
 PubkeyAuthentication yes
 AuthorizedKeysFile .ssh/authorized_keys

@@ -1,0 +1,38 @@
+{
+  "_purpose": "Dummy issuer-key material for E2E tap → activation testing.  These values let the IssuerProfile row pass Zod validation; data-prep will FAIL when it tries to derive ICC keys from a non-existent ARN, but that failure is non-fatal — register.service catches and logs, and the card still lands in PERSONALISED.  Mobile-app provisioning is the bit that depends on real keys; that's a separate session.",
+
+  "_imkValuesIfYouNeedToImportLater": {
+    "imkAc":  "0123456789ABCDEFFEDCBA9876543210",
+    "imkSmi": "FEDCBA98765432100123456789ABCDEF",
+    "imkSmc": "AABBCCDDEEFF00112233445566778899",
+    "tmk":    "00112233445566778899AABBCCDDEEFF",
+    "_format": "TDES_2KEY (16 hex bytes); use AWS Payment Cryptography ImportKey with TR-31 wrapping for production"
+  },
+
+  "issuerProfile": {
+    "scheme": "mchip_advance",
+    "cvn": 18,
+    "imkAlgorithm": "TDES_2KEY",
+    "derivationMethod": "METHOD_A",
+
+    "tmkKeyArn":      "arn:aws:payment-cryptography:ap-southeast-2:600743178530:key/test-tmk-noop",
+    "imkAcKeyArn":    "arn:aws:payment-cryptography:ap-southeast-2:600743178530:key/test-imk-ac-noop",
+    "imkSmiKeyArn":   "arn:aws:payment-cryptography:ap-southeast-2:600743178530:key/test-imk-smi-noop",
+    "imkSmcKeyArn":   "arn:aws:payment-cryptography:ap-southeast-2:600743178530:key/test-imk-smc-noop",
+    "imkIdnKeyArn":   "",
+    "issuerPkKeyArn": "arn:aws:payment-cryptography:ap-southeast-2:600743178530:key/test-issuer-pk-noop",
+
+    "caPkIndex":           "9F",
+    "issuerPkCertificate": "DEADBEEF",
+    "issuerPkRemainder":   "",
+    "issuerPkExponent":    "03",
+
+    "aid":              "A0000000041010",
+    "appLabel":         "TEST PROGRAM",
+    "appPreferredName": "Test",
+    "appPriority":      "01",
+    "appVersionNumber": "0002",
+    "aip":              "1980",
+    "afl":              "08010100"
+  }
+}
