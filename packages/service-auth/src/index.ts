@@ -185,28 +185,23 @@ export function requireSignedRequest(opts: RequireSignedRequestOptions): Request
       next();
     } catch (err) {
       if (err instanceof ServiceAuthError) {
-        // DEBUG: log every ServiceAuthError so we can see *which* code
-        // path is firing — not just bad_signature.  console.log to stdout
-        // (some awslogs setups buffer stderr longer than stdout).
-        const rb = (req as RequestWithRawBody).rawBody;
-        console.log('[service-auth DEBUG err]', JSON.stringify({
-          code: err.code,
-          method: req.method,
-          originalUrl: req.originalUrl,
-          hasRawBody: !!rb,
-          rawBodyLen: rb?.length ?? 0,
-          rawBodyHex: rb ? rb.subarray(0, 64).toString('hex') : null,
-          rawBodyUtf8: rb ? rb.subarray(0, 120).toString('utf8') : null,
-          auth: req.get('authorization')?.slice(0, 100),
-        }));
+        // DEBUG (temporary): log what the server actually saw so a signing
+        // mismatch is visible in CloudWatch.  Remove after diagnosis.
+        if (err.code === 'bad_signature') {
+          const rb = (req as RequestWithRawBody).rawBody;
+          console.error('[service-auth DEBUG bad_signature]', JSON.stringify({
+            method: req.method,
+            originalUrl: req.originalUrl,
+            hasRawBody: !!rb,
+            rawBodyLen: rb?.length ?? 0,
+            rawBodyHex: rb ? rb.subarray(0, 64).toString('hex') : null,
+            rawBodyUtf8: rb ? rb.subarray(0, 100).toString('utf8') : null,
+            auth: req.get('authorization')?.slice(0, 80),
+          }));
+        }
         res.status(401).json({ error: { code: err.code, message: err.message } });
         return;
       }
-      // Anything that ISN'T a ServiceAuthError but lands here — log it.
-      console.log('[service-auth DEBUG non-svc-err]', JSON.stringify({
-        ctor: (err as { constructor?: { name?: string } })?.constructor?.name,
-        message: err instanceof Error ? err.message : String(err),
-      }));
       next(err);
     }
   };
