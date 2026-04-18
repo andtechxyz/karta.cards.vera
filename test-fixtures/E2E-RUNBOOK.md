@@ -135,6 +135,40 @@ Use New T4T desktop tool (or palisade-pa equivalent) to write the URL with the m
 3. Tap card again.  This time tap service sees `retailSaleStatus=SOLD`, redirects to `activation.karta.cards/activate#hand=<token>`.
 4. Complete WebAuthn registration → status flips to ACTIVATED.
 
+## Step 6b — (optional) pre-register a FIDO credential to skip the WebAuthn ceremony
+
+If your test phone is flaky on Android Chrome CTAP1-NFC, you can short-
+circuit the runtime WebAuthn registration.  During perso, drive the
+FIDO applet on the chip to make a credential, then POST it to admin:
+
+```bash
+# Replace with the actual values your perso tool reads off the FIDO applet
+curl -X POST https://manage.karta.cards/api/cards/e2e_test_001/credentials \
+  -H "authorization: Bearer $ID_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "credentialId": "<base64url credentialId from the applet>",
+    "publicKey":    "<base64url COSE public key from the applet>",
+    "transports":   ["nfc"],
+    "deviceName":   "Pre-registered (perso)"
+  }'
+```
+
+Or use the admin UI: Cards tab → expand the row (▸ button) →
+"Pre-register FIDO credential" form.
+
+After that:
+
+- Tap the card.  tap service does SUN verify, hands off to activation.
+- activation `/begin` returns `{ mode: "confirm" }` (no challenge).
+- activation `/finish` is called with `{ confirm: true }` — no second NFC
+  tap, no Chrome prompt.
+- Card flips to ACTIVATED.
+
+The pre-registered credential becomes the regular credential the card
+uses for subsequent payment authentications, so the rest of the flow
+(provisioning / payments) is unaffected.
+
 ## Step 7 — provisioning (mobile app session)
 
 data-prep is running with `DATA_PREP_MOCK_EMV=true` — the EMV key derivation
