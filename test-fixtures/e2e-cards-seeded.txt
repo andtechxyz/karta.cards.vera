@@ -1,0 +1,92 @@
+================================================================
+ E2E test cards seeded in prod — 2026-04-18
+================================================================
+
+These two cards are live in production.  They correspond to:
+  - a RETAIL flow card under InComm / SecureGift (microsite)
+  - an FI-product flow card under Karta Bank / Karta Platinum (no microsite)
+
+Both have pre-registered FIDO credentials so activation can take the
+confirm-mode short-circuit (no WebAuthn ceremony at tap time) if needed.
+
+================================================================
+ RETAIL — SecureGift (RETAIL, microsite-enabled)
+================================================================
+  FI slug:          incomm
+  Program:          securegift
+  Program type:     RETAIL
+  cardRef:          e2e_retail_58e4
+  cardId:           cmo4dyk7h0005t0it81ldc53m
+  PAN:              4306387471763213
+  Expiry:           12/29
+  CVC:              929
+  UID:              D80EA735CA5FC5
+  SDM Meta Key:     4e3cdcff345e0d5a65125a0ef706a0d8
+  SDM File Key:     4e7d196999fa77aea2069543baf26b04
+  Retail status:    SHIPPED  (tap → microsite info-only)
+  Pre-reg cred id:  cred_0202fd37
+  Write this URL to the card's NDEF file during perso:
+    https://tap.karta.cards/activate/e2e_retail_58e4?e={PICCData}&m={CMAC}
+
+Expected first-tap behaviour (before marking SOLD):
+  Once the SecureGift microsite zip is uploaded + activated for program
+  'securegift', tap service will 302 to
+  microsite.karta.cards/programs/securegift/?card=e2e_retail_58e4&shipped=true
+  The microsite should render info-only (no activation CTA).
+
+  Until the microsite is activated, tap falls back to the activation
+  page (since the micrositeActiveVersion column is NULL).
+
+To flip to SOLD (from admin UI or via curl below, then re-tap):
+  curl -X POST https://manage.karta.cards/api/cards/e2e_retail_58e4/mark-sold \
+    -H "authorization: Bearer $ADMIN_ID_TOKEN"
+
+================================================================
+ FI PRODUCT — Karta Platinum (PREPAID_RELOADABLE)
+================================================================
+  FI slug:          kartabank
+  Program:          karta_platinum
+  Program type:     PREPAID_RELOADABLE
+  cardRef:          e2e_fi_2590
+  cardId:           cmo4e183f0007t0itfb967e4h
+  PAN:              4580483507983243
+  Expiry:           12/29
+  CVC:              929
+  UID:              C74D303B4739C8
+  SDM Meta Key:     5d96c37909d28826549373b7ac96dbe5
+  SDM File Key:     b29849cb018bb50d95ce396e1fc1a28f
+  Retail status:    n/a
+  Pre-reg cred id:  cred_37a503e1
+  Write this URL to the card's NDEF file during perso:
+    https://tap.karta.cards/activate/e2e_fi_2590?e={PICCData}&m={CMAC}
+
+Expected first-tap behaviour:
+  tap service verifies SUN, hands off to activation.  activation /begin
+  sees the pre-registered cred and returns { mode: "confirm" }.  The
+  activation frontend (on Android Chrome) skips navigator.credentials.
+  create() and POSTs /finish with { confirm: true }.  Card flips to
+  ACTIVATED and the user lands on the activation success page (no
+  microsite configured for this program).
+
+To run the WebAuthn ceremony path INSTEAD of the confirm short-circuit:
+  # Delete the pre-registered credential via admin UI:
+  #   Cards tab → expand e2e_fi_2590 → Delete pre-registered cred
+  # Then retap — activation /begin will return mode=register + options.
+
+================================================================
+ Sanity checks before tapping tomorrow
+================================================================
+
+1. https://tap.karta.cards/api/health returns 200.
+2. https://activation.karta.cards/api/health returns 200.
+3. Admin UI at https://manage.karta.cards shows both cards in the
+   Cards tab with expected Status + Retail-sale cells.
+4. Upload microsites/securegift-v1.zip via admin UI →
+   Programs → securegift → Microsites → Upload → Activate.
+   This enables the shipped-retail info-only redirect.
+5. Card hardware: the two test cards must already have the FIDO +
+   T4T applet loaded AND be perso'd with the UID + SDM keys above.
+   Use the New T4T perso tool from external/new-t4t/perso/ with
+   the exact hex values.
+
+================================================================
