@@ -7,6 +7,7 @@
  * Ported from palisade-data-prep/app/services/emv_derivation.py.
  */
 
+import { createHash } from 'node:crypto';
 import {
   PaymentCryptographyDataClient,
   GenerateCardValidationDataCommand,
@@ -38,10 +39,35 @@ export interface DerivedKeys {
 export class EmvDerivationService {
   private readonly pcData: PaymentCryptographyDataClient;
   private readonly pcControl: PaymentCryptographyClient;
+  private readonly mockMode: boolean;
 
-  constructor(region = 'ap-southeast-2') {
+  constructor(region = 'ap-southeast-2', mockMode = false) {
     this.pcData = new PaymentCryptographyDataClient({ region });
     this.pcControl = new PaymentCryptographyClient({ region });
+    this.mockMode = mockMode;
+  }
+
+  // -------------------------------------------------------------------------
+  // Mock helpers — used when DATA_PREP_MOCK_EMV=true.  All outputs are
+  // deterministic hashes of the inputs so you can inspect a SAD after-the-
+  // fact and confirm it came from the expected card.  Structurally valid
+  // (right lengths, right charset) so downstream SAD build + mobile
+  // personalisation can consume them unchanged.  NOT cryptographically
+  // meaningful — a card personalised with these keys can't do real EMV.
+  // -------------------------------------------------------------------------
+
+  private mockIcvv(pan: string, expiry: string): string {
+    const h = createHash('sha256').update(`icvv:${pan}:${expiry}`).digest('hex');
+    const n = parseInt(h.slice(0, 4), 16) % 1000;
+    return n.toString().padStart(3, '0');
+  }
+
+  private mockDerivedKey(label: string, pan: string, csn: string) {
+    const seed = createHash('sha256').update(`${label}:${pan}:${csn}`).digest('hex');
+    return {
+      keyArn: `mock:${label}:${seed.slice(0, 16)}`,
+      kcv: seed.slice(0, 6).toUpperCase(),
+    };
   }
 
   /**
@@ -49,6 +75,7 @@ export class EmvDerivationService {
    * @returns 3-digit iCVV string.
    */
   async deriveIcvv(tmkKeyArn: string, pan: string, expiry: string): Promise<string> {
+    if (this.mockMode) return this.mockIcvv(pan, expiry);
     const response = await this.pcData.send(
       new GenerateCardValidationDataCommand({
         KeyIdentifier: tmkKeyArn,
@@ -81,6 +108,7 @@ export class EmvDerivationService {
     pan: string,
     csn: string,
   ): Promise<{ keyArn: string; kcv: string }> {
+    if (this.mockMode) return this.mockDerivedKey(imkArn.slice(-8) || 'imk', pan, csn);
     // Build derivation data per Method A: right 16 hex chars of (PAN || CSN)
     const panCsn = (pan + csn).padEnd(16, '0').slice(-16);
     const derivData = Buffer.from(panCsn, 'hex');

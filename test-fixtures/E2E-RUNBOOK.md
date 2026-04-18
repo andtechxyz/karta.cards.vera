@@ -137,11 +137,43 @@ Use New T4T desktop tool (or palisade-pa equivalent) to write the URL with the m
 
 ## Step 7 — provisioning (mobile app session)
 
-Out of scope for this session — switch to the mobile app session and continue from `app.karta.cards/provision#hand=<token>`.
+data-prep is running with `DATA_PREP_MOCK_EMV=true` — the EMV key derivation
+step skips AWS Payment Cryptography and returns deterministic fake iCVVs +
+mock key ARNs.  That means:
 
-Expected: data-prep stage will likely fail because the dummy issuer-key ARNs don't exist in AWS Payment Cryptography.  That's intentional for tonight's setup.  Fix by either:
-- importing real test keys into AWS PC and updating IssuerProfile.imkAcKeyArn etc.
-- OR adding a "mock mode" to `services/data-prep/src/services/emv-derivation.ts` that returns deterministic fake outputs when an env flag is set.
+- ✅ The full tap → activation → microsite → provisioning chain runs end-to-end.
+- ✅ The mobile app sees a real SadRecord and can walk its provisioning state
+  machine against the PA applet on the card.
+- ❌ Real EMV payment transactions against an issuer system would fail
+  (the iCVV is a hash, not a real CVV2).  That's fine for E2E; tap-to-pay
+  isn't in scope this week.
+
+Create an IssuerProfile for `prog_test_std` so data-prep has a row to read.
+Use `test-fixtures/issuer-keys-test.json` as the field reference (the ARN
+values are ignored in mock mode — they just need to be non-empty strings).
+
+Fastest way: admin UI → Programs → `prog_test_std` → "Issuer profile"
+section → fill the fields from the JSON fixture.  Link it to the chip
+profile uploaded in Step 3.
+
+Then switch to the mobile app session and continue from
+`app.karta.cards/provision#hand=<token>`.
+
+### Flipping to real Payment Cryptography
+
+When you're ready for full EMV fidelity (real iCVVs that authorise against
+a scheme):
+
+1. Create 4 keys in AWS Payment Cryptography (`ap-southeast-2`):
+   - TMK         (`TR31_K0_KEY_ENCRYPTION_KEY`     or `TR31_V1_PIN_VERIFICATION_KEY`)
+   - IMK-AC      (`TR31_E0_EMV_MKEY_APP_CRYPTOGRAMS`)
+   - IMK-SMI     (`TR31_E1_EMV_MKEY_DATA_INTEGRITY`)
+   - IMK-SMC     (`TR31_E2_EMV_MKEY_DATA_ENCIPHERMENT`)
+   ~US$1/day per key.
+2. Paste the ARNs into the IssuerProfile row.
+3. Flip the secret: `aws secretsmanager put-secret-value --secret-id
+   vera/DATA_PREP_MOCK_EMV --secret-string "false" --region ap-southeast-2`
+4. Force redeploy data-prep.
 
 ## Troubleshooting
 

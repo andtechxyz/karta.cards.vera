@@ -17,6 +17,16 @@ const { get: getDataPrepConfig, reset: _resetDataPrepConfig } = defineEnv({
 
   // SAD record TTL in days
   SAD_TTL_DAYS: z.coerce.number().int().positive().default(30),
+
+  // Mock the EMV key derivation (skip AWS Payment Cryptography).  Returns
+  // deterministic fake iCVV + mock key ARNs.  Useful for E2E testing
+  // before real PC keys are provisioned, or in staging/dev where paying
+  // ~$4/day for 4 HSM keys isn't justified.  NEVER set true in prod —
+  // the mock iCVV won't authorise against issuer systems.
+  DATA_PREP_MOCK_EMV: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 export { getDataPrepConfig, _resetDataPrepConfig };

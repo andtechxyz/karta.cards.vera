@@ -185,6 +185,9 @@ ensure_secret "vera/RETRIEVAL_TOKEN_TTL_SECONDS" "CHANGEME"
 # New secrets for provisioning services
 ensure_secret "vera/KMS_SAD_KEY_ARN"            "CHANGEME"
 ensure_secret "vera/SERVICE_AUTH_PROVISIONING_SECRET" "CHANGEME"
+# Mock-mode toggle for data-prep — "true" bypasses AWS Payment Cryptography
+# (deterministic fake iCVV + mock key ARNs).  Safe only for non-prod.
+ensure_secret "vera/DATA_PREP_MOCK_EMV"         "false"
 ensure_secret "vera/DATA_PREP_SERVICE_URL"      "http://internal-vera-internal-886106335.ap-southeast-2.elb.amazonaws.com:3006"
 ensure_secret "vera/RCA_SERVICE_URL"            "http://internal-vera-internal-886106335.ap-southeast-2.elb.amazonaws.com:3007"
 ensure_secret "vera/CALLBACK_HMAC_SECRET"       "CHANGEME"
@@ -254,6 +257,7 @@ ARN_SERVICE_AUTH_KEYS=$(get_secret_arn "vera/SERVICE_AUTH_KEYS")
 ARN_RETRIEVAL_TOKEN_TTL_SECONDS=$(get_secret_arn "vera/RETRIEVAL_TOKEN_TTL_SECONDS")
 ARN_ADMIN_API_KEY=$(get_secret_arn "vera/ADMIN_API_KEY")
 ARN_KMS_SAD_KEY_ARN=$(get_secret_arn "vera/KMS_SAD_KEY_ARN")
+ARN_DATA_PREP_MOCK_EMV=$(get_secret_arn "vera/DATA_PREP_MOCK_EMV")
 ARN_SERVICE_AUTH_PROVISIONING_SECRET=$(get_secret_arn "vera/SERVICE_AUTH_PROVISIONING_SECRET")
 ARN_CALLBACK_HMAC_SECRET=$(get_secret_arn "vera/CALLBACK_HMAC_SECRET")
 ARN_EMBOSSING_KEY_V1=$(get_secret_arn "vera/EMBOSSING_KEY_V1")
@@ -529,7 +533,8 @@ aws ecs register-task-definition --cli-input-json "$(cat <<TASKJSON
       "secrets": [
         { "name": "DATABASE_URL",                   "valueFrom": "${ARN_DATABASE_URL}" },
         { "name": "PROVISION_AUTH_KEYS",             "valueFrom": "${ARN_PROVISION_AUTH_KEYS}" },
-        { "name": "KMS_SAD_KEY_ARN",                "valueFrom": "${ARN_KMS_SAD_KEY_ARN}" }
+        { "name": "KMS_SAD_KEY_ARN",                "valueFrom": "${ARN_KMS_SAD_KEY_ARN}" },
+        { "name": "DATA_PREP_MOCK_EMV",             "valueFrom": "${ARN_DATA_PREP_MOCK_EMV}" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
