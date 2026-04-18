@@ -24,3 +24,7 @@ services/*/frontend/package-lock.json
 # personalisation flow) but not Vera's source — never commit.
 external/
 .claude/
+
+# Microsite ZIP artifacts (built by spawn-task agents, uploaded via admin UI).
+# The admin upload is the source of truth; checking these in just bloats history.
+microsites/*.zip
