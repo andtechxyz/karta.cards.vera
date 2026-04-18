@@ -559,6 +559,15 @@ model WebAuthnCredential {
   // The device a passkey was registered from.  For display / debugging.
   deviceName String?
 
+  // True if this credential was injected by the perso/admin path before any
+  // user-side WebAuthn ceremony — i.e., the FIDO applet was scripted to
+  // generate it during personalisation and the public key was POSTed to
+  // /api/admin/cards/:cardRef/credentials.  When true, activation /begin
+  // short-circuits the runtime ceremony: the SUN-verified tap + the
+  // pre-existing cred is enough to flip the card to ACTIVATED.  Only one
+  // preregistered credential per card.
+  preregistered Boolean @default(false)
+
   // Back-reference to the card this credential authenticates.
   cardId String
   card   Card   @relation(fields: [cardId], references: [id], onDelete: Cascade)

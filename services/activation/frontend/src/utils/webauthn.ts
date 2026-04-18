@@ -65,20 +65,46 @@ export async function authenticate(input: {
  * landed them on /activate?session=<token>.  The session token is the only
  * handle the page sees; the server resolves it to the underlying card.
  *
- * Two browser legs:
- *   1. /begin → server returns CTAP1 NFC registration options
- *   2. user taps the FIDO2 applet on the same physical card
- *   3. /finish → server verifies + atomically activates the card
+ * Two paths, decided by the /begin response:
+ *
+ *   1. mode=register (no preregistered cred):
+ *      a. /begin returns CTAP1 NFC registration options
+ *      b. user taps the FIDO2 applet on the same physical card
+ *      c. /finish verifies the attestation + activates
+ *
+ *   2. mode=confirm (perso pre-loaded a FIDO credential):
+ *      a. /begin returns { mode: "confirm" } — no WebAuthn options
+ *      b. /finish is called with { confirm: true } — no second NFC tap
+ *      c. server flips the card to ACTIVATED, returns the same shape
+ *
+ * The cardholder UX in confirm mode is one tap to the SUN URL → page
+ * loads → page calls /begin → /finish → success — no authenticator
+ * prompt at all.  Faster + sidesteps Android Chrome's CTAP1-NFC quirks.
  */
+type BeginResponse =
+  | { mode: 'register'; options: Parameters<typeof startRegistration>[0] }
+  | { mode: 'confirm' };
+
 export async function activateWithSession(input: {
   sessionToken: string;
   deviceLabel?: string;
-}): Promise<{ credentialId: string; cardActivated: true; micrositeUrl: string | null }> {
+}): Promise<{
+  credentialId: string;
+  cardActivated: true;
+  mode: 'register' | 'confirm';
+  micrositeUrl: string | null;
+}> {
   const path = `/activation/sessions/${encodeURIComponent(input.sessionToken)}`;
-  const options = await api.post<Parameters<typeof startRegistration>[0]>(`${path}/begin`);
+  const begin = await api.post<BeginResponse>(`${path}/begin`);
 
-  const attResp = await startRegistration(options);
+  if (begin.mode === 'confirm') {
+    return api.post(`${path}/finish`, {
+      confirm: true,
+      deviceLabel: input.deviceLabel,
+    });
+  }
 
+  const attResp = await startRegistration(begin.options);
   return api.post(`${path}/finish`, {
     response: attResp,
     deviceLabel: input.deviceLabel,

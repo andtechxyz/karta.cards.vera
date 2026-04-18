@@ -32,17 +32,31 @@ router.post('/sessions/:token/begin', async (req, res) => {
 });
 
 // POST /api/activation/sessions/:token/finish
-const finishSchema = z.object({
-  response: z.unknown(),
-  deviceLabel: z.string().max(128).optional(),
-});
+//
+// Accepts either:
+//   { response: <AttestationResponseJSON>, deviceLabel? } — register mode
+//   { confirm: true, deviceLabel? }                       — confirm mode
+//
+// Exactly one of response / confirm must be present; refine() enforces that
+// rather than letting the service handler discover the mismatch later.
+const finishSchema = z
+  .object({
+    response: z.unknown().optional(),
+    confirm: z.literal(true).optional(),
+    deviceLabel: z.string().max(128).optional(),
+  })
+  .refine((b) => (b.response !== undefined) !== (b.confirm === true), {
+    message: 'exactly one of { response } (register) or { confirm: true } must be supplied',
+  });
 
 router.post('/sessions/:token/finish', validateBody(finishSchema), async (req, res) => {
+  const body = req.body as z.infer<typeof finishSchema>;
   const result = await finishActivationRegistration({
     sessionToken: req.params.token,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    response: req.body.response as any,
-    deviceLabel: req.body.deviceLabel,
+    response: body.response as any,
+    confirm: body.confirm,
+    deviceLabel: body.deviceLabel,
   });
   res.json(result);
 });

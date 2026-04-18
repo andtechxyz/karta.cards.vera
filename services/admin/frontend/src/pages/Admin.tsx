@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { api, errorMsg, getAuthToken, clearAuthToken, setRefreshToken } from '../utils/api';
 import { formatDate, formatMoney } from '../utils/format';
@@ -316,6 +316,7 @@ const labels: Record<TabKey, string> = {
 function CardsTab() {
   const { cards, loading, reload } = useCards();
   const [programs, setPrograms] = useState<Program[]>([]);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   // Fetch programs once for the per-row program selector.  Admin is the only
   // surface that mutates Card.programId; a fresh fetch on mount is enough —
@@ -342,6 +343,7 @@ function CardsTab() {
         <table>
           <thead>
             <tr>
+              <th></th>
               <th>Card ref</th>
               <th>Status</th>
               <th>Retail sale</th>
@@ -354,7 +356,18 @@ function CardsTab() {
           </thead>
           <tbody>
             {cards.map((c) => (
-              <tr key={c.id}>
+              <React.Fragment key={c.id}>
+              <tr>
+                <td>
+                  <button
+                    className="btn ghost"
+                    style={{ padding: '2px 8px', fontSize: 13 }}
+                    title={expanded === c.id ? 'Collapse' : 'Expand for credential management'}
+                    onClick={() => setExpanded((cur) => (cur === c.id ? null : c.id))}
+                  >
+                    {expanded === c.id ? '▾' : '▸'}
+                  </button>
+                </td>
                 <td className="mono">{c.cardRef}</td>
                 <td>
                   <span className={`tag ${c.status === 'ACTIVATED' ? 'ok' : ''}`}>
@@ -390,6 +403,14 @@ function CardsTab() {
                 </td>
                 <td className="small">{formatDate(c.createdAt)}</td>
               </tr>
+              {expanded === c.id && (
+                <tr>
+                  <td colSpan={9} style={{ background: '#fafafa', padding: 16 }}>
+                    <CardCredentialsPanel cardRef={c.cardRef} cardStatus={c.status} onChanged={reload} />
+                  </td>
+                </tr>
+              )}
+              </React.Fragment>
             ))}
           </tbody>
         </table>
@@ -507,6 +528,227 @@ function RetailSaleCell({
         {busy ? '…' : 'Mark sold'}
       </button>
       {err && <div className="tag err" style={{ marginTop: 4 }}>{err}</div>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-card expandable panel — pre-register a FIDO credential, list existing
+// credentials, delete pre-registered ones.
+//
+// Pre-registration is the perso-time path: during card personalisation the
+// FIDO applet generates a credential on the chip; perso operators capture
+// the credentialId + COSE public key and POST them here.  At activation
+// time the SUN tap + the existing credential together flip the card to
+// ACTIVATED — no runtime WebAuthn ceremony.
+// ---------------------------------------------------------------------------
+
+interface CardCredentialRow {
+  id: string;
+  credentialId: string;
+  kind: 'PLATFORM' | 'CROSS_PLATFORM';
+  transports: string[];
+  deviceName: string | null;
+  preregistered: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+function CardCredentialsPanel({
+  cardRef,
+  cardStatus,
+  onChanged,
+}: {
+  cardRef: string;
+  cardStatus: string;
+  onChanged: () => Promise<void> | void;
+}) {
+  const [creds, setCreds] = useState<CardCredentialRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await api.get<CardCredentialRow[]>(`/cards/${cardRef}/credentials`);
+      setCreds(rows);
+      setErr(null);
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [cardRef]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const hasPreregistered = creds.some((c) => c.preregistered);
+  const canPreregister = cardStatus === 'PERSONALISED' && !hasPreregistered;
+
+  return (
+    <div>
+      <h4 style={{ margin: '0 0 8px 0' }}>Credentials</h4>
+      {err && <p className="tag err">{err}</p>}
+      {loading ? (
+        <p className="small">Loading…</p>
+      ) : creds.length === 0 ? (
+        <p className="small">No credentials registered.</p>
+      ) : (
+        <table style={{ marginBottom: 12 }}>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Source</th>
+              <th>Kind</th>
+              <th>Transports</th>
+              <th>Device</th>
+              <th>Created</th>
+              <th>Last used</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {creds.map((cr) => (
+              <tr key={cr.id}>
+                <td className="mono small" style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {cr.credentialId.slice(0, 18)}…
+                </td>
+                <td>
+                  <span className={`tag ${cr.preregistered ? 'ok' : ''}`}>
+                    {cr.preregistered ? 'Pre-registered' : 'User-registered'}
+                  </span>
+                </td>
+                <td className="small">{cr.kind === 'PLATFORM' ? 'Face ID / Hello' : 'NFC'}</td>
+                <td className="small">{cr.transports.join(', ') || '—'}</td>
+                <td className="small">{cr.deviceName ?? '—'}</td>
+                <td className="small">{formatDate(cr.createdAt)}</td>
+                <td className="small">{cr.lastUsedAt ? formatDate(cr.lastUsedAt) : '—'}</td>
+                <td>
+                  {cr.preregistered && (
+                    <button
+                      className="btn ghost"
+                      style={{ padding: '2px 8px', fontSize: 12 }}
+                      onClick={async () => {
+                        if (!confirm('Delete this pre-registered credential?')) return;
+                        try {
+                          await api.delete(`/cards/${cardRef}/credentials/${cr.id}`);
+                          await reload();
+                          await onChanged();
+                        } catch (e) {
+                          setErr(errorMsg(e));
+                        }
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {canPreregister ? (
+        <PreRegisterCredentialForm cardRef={cardRef} onCreated={async () => { await reload(); await onChanged(); }} />
+      ) : hasPreregistered ? (
+        <p className="small">
+          Card already has a pre-registered credential — delete it above to inject a different one.
+        </p>
+      ) : (
+        <p className="small">
+          Card is <code>{cardStatus}</code> — pre-registration is only valid in <code>PERSONALISED</code>.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PreRegisterCredentialForm({
+  cardRef,
+  onCreated,
+}: {
+  cardRef: string;
+  onCreated: () => Promise<void> | void;
+}) {
+  const [credentialId, setCredentialId] = useState('');
+  const [publicKey, setPublicKey] = useState('');
+  const [transports, setTransports] = useState('nfc');
+  const [deviceName, setDeviceName] = useState('Pre-registered (perso)');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.post(`/cards/${cardRef}/credentials`, {
+        credentialId: credentialId.trim(),
+        publicKey: publicKey.trim(),
+        transports: transports.split(',').map((s) => s.trim()).filter(Boolean),
+        deviceName: deviceName || undefined,
+      });
+      setCredentialId('');
+      setPublicKey('');
+      await onCreated();
+    } catch (e) {
+      setErr(errorMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 12, padding: 12, border: '1px solid #d3d3d3', borderRadius: 6, background: '#fff' }}>
+      <h4 style={{ marginTop: 0 }}>Pre-register FIDO credential</h4>
+      <p className="small" style={{ marginTop: 0 }}>
+        Captured by the perso tool from the FIDO applet on the chip.
+        Both fields are base64url (no padding).  Card flips to ACTIVATED on
+        the next tap — the runtime WebAuthn ceremony is skipped.
+      </p>
+      <label>Credential ID</label>
+      <textarea
+        value={credentialId}
+        onChange={(e) => setCredentialId(e.target.value)}
+        placeholder="base64url credentialId from FIDO makeCredential"
+        rows={2}
+        className="mono"
+        style={{ width: '100%', fontSize: 12 }}
+      />
+      <label>Public key (COSE)</label>
+      <textarea
+        value={publicKey}
+        onChange={(e) => setPublicKey(e.target.value)}
+        placeholder="base64url COSE public key"
+        rows={3}
+        className="mono"
+        style={{ width: '100%', fontSize: 12 }}
+      />
+      <label>Transports (comma-separated)</label>
+      <input
+        value={transports}
+        onChange={(e) => setTransports(e.target.value)}
+        placeholder="nfc"
+        className="mono"
+      />
+      <label>Device label (optional)</label>
+      <input
+        value={deviceName}
+        onChange={(e) => setDeviceName(e.target.value)}
+        placeholder="Pre-registered (perso)"
+      />
+      {err && <p className="tag err" style={{ marginTop: 8 }}>{err}</p>}
+      <div style={{ marginTop: 8 }}>
+        <button
+          className="btn primary"
+          disabled={busy || !credentialId.trim() || !publicKey.trim()}
+          onClick={submit}
+        >
+          {busy ? 'Saving…' : 'Pre-register'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1614,7 +1856,7 @@ function ProgramForm({
         value={pre}
         onChange={(e) => setPre(e.target.value)}
         className="mono"
-        placeholder="https://pay.karta.cards/activate/{cardRef}?e={PICCData}&m={CMAC}"
+        placeholder="https://tap.karta.cards/activate/{cardRef}?e={PICCData}&m={CMAC}"
       />
 
       <label>Post-activation (written after WebAuthn registration)</label>
@@ -1622,8 +1864,30 @@ function ProgramForm({
         value={post}
         onChange={(e) => setPost(e.target.value)}
         className="mono"
-        placeholder="https://pay.karta.cards/tap/{cardRef}?e={PICCData}&m={CMAC}"
+        placeholder="https://tap.karta.cards/pay/{cardRef}?e={PICCData}&m={CMAC}"
       />
+
+      <h3 style={{ marginTop: 20 }}>Provisioning applet</h3>
+      <p className="small">
+        Cards in this program are personalised with the karta.cards T4T+FIDO
+        applet bundle.  Perso operators load the CAP file onto each chip
+        before shipping; the AIDs below are what the applet exposes at
+        runtime, and they're also baked into the chip-profile selector.
+      </p>
+      <table className="kv" style={{ marginBottom: 8, fontSize: 13 }}>
+        <tbody>
+          <tr><th style={{ textAlign: 'left' }}>NDEF Tag App AID</th><td><code>D2760000850101</code></td></tr>
+          <tr><th style={{ textAlign: 'left' }}>FIDO2 applet AID</th><td><code>A0000006472F0001</code></td></tr>
+          <tr><th style={{ textAlign: 'left' }}>Source</th><td><code>external/new-t4t/applet/</code> (sibling project)</td></tr>
+          <tr><th style={{ textAlign: 'left' }}>CAP file</th><td><code>external/new-t4t/applet/build/javacard/PalisadeT4T.cap</code></td></tr>
+        </tbody>
+      </table>
+      <p className="small">
+        To inject a pre-generated FIDO credential at perso time, see the
+        Cards tab → expand a row → "Pre-register FIDO credential".  Pre-
+        registered cards skip the runtime WebAuthn ceremony — the SUN tap
+        + the existing credential together flip the card to ACTIVATED.
+      </p>
 
       <h3 style={{ marginTop: 20 }}>Embossing template</h3>
       <p className="small">
