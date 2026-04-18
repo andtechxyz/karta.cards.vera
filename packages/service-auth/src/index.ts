@@ -178,20 +178,6 @@ export function requireSignedRequest(opts: RequireSignedRequestOptions): Request
       next();
     } catch (err) {
       if (err instanceof ServiceAuthError) {
-        // DEBUG (temporary): log what the server actually saw so a signing
-        // mismatch is visible in CloudWatch.  Remove after diagnosis.
-        if (err.code === 'bad_signature') {
-          const rb = (req as RequestWithRawBody).rawBody;
-          console.error('[service-auth DEBUG bad_signature]', JSON.stringify({
-            method: req.method,
-            originalUrl: req.originalUrl,
-            hasRawBody: !!rb,
-            rawBodyLen: rb?.length ?? 0,
-            rawBodyHex: rb ? rb.subarray(0, 64).toString('hex') : null,
-            rawBodyUtf8: rb ? rb.subarray(0, 100).toString('utf8') : null,
-            auth: req.get('authorization')?.slice(0, 80),
-          }));
-        }
         res.status(401).json({ error: { code: err.code, message: err.message } });
         return;
       }
