@@ -2,11 +2,29 @@
 # ---------------------------------------------------------------------------
 # Vera AWS infrastructure setup (post-split)
 #
-# Post-split scope: pay (3003), vault (3004), admin (3005).  The
-# card-domain services (tap, activation, data-prep, rca, batch-processor,
-# sftp) moved to the Palisade repo and are provisioned by Palisade's own
-# aws-setup.sh against the same AWS account.  Secrets for moved services
-# live under the palisade/ prefix and are not touched by this script.
+# Repo scope: vault + pay + admin-lite.  Vera owns the PCI token vault, the
+# tokenised payment surface (pay), and a Vera-side admin that shrank to
+# vault-proxy + pay-proxy + tokenisation-programs + capabilities tabs.  All
+# card / chip / issuer / embossing / SDM / RCA / activation concerns moved
+# to the Palisade repo and are provisioned by Palisade's own aws-setup.sh
+# against the same AWS account.
+#
+# Services managed here:
+#   - vera-pay    (3003)  public  — tokenised checkout
+#   - vera-vault  (3004)  internal — PAN vault / retrieval tokens
+#   - vera-admin  (3005)  public  — admin SPA backend (proxies + capabilities)
+#
+# Cross-repo wiring (managed here):
+#   - pay calls Palisade's activation for card-state lookup over HMAC.  The
+#     secret lives in vera/SERVICE_AUTH_PALISADE_SECRET and MUST match
+#     Palisade activation's PAY_AUTH_KEYS['pay'] value.  PALISADE_BASE_URL
+#     defaults to the Palisade activation internal ALB listener.
+#   - admin's /api/capabilities advertises HAS_PALISADE=true so the SPA
+#     renders Palisade-backed tabs that proxy through /palisade-api/*.
+#
+# Resources that were deleted in the split (tap, activation, data-prep,
+# rca, batch-processor, sftp, card-ops) are kept as commented stubs below
+# for audit — see "# Deleted post-split" markers.
 #
 # Idempotent: safe to re-run.  Creates or updates secrets, task
 # definitions, target groups, ALB listener rules, and ECS services for
@@ -31,12 +49,19 @@ ACCOUNT="600743178530"
 VPC="vpc-09484084ef246d4a0"
 CLUSTER="vera"
 EXEC_ROLE="arn:aws:iam::${ACCOUNT}:role/vera-ecs-execution"
+PAY_TASK_ROLE="arn:aws:iam::${ACCOUNT}:role/vera-pay-task"
 PUBLIC_ALB_ARN="arn:aws:elasticloadbalancing:${REGION}:${ACCOUNT}:loadbalancer/app/vera-public/f71842c99b11992c"
 INTERNAL_ALB_ARN="arn:aws:elasticloadbalancing:${REGION}:${ACCOUNT}:loadbalancer/app/vera-internal/f607108ee78ebe20"
 PRIVATE_SUBNETS="subnet-0d475c49f65f05e86,subnet-0397a18095049f972"
 ECS_SG="sg-086e7b16e5351f155"
 ECR_BASE="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com"
 INTERNAL_ALB_DNS="internal-vera-internal-886106335.${REGION}.elb.amazonaws.com"
+
+# Palisade's internal ALB (same physical LB — Palisade reuses vera-internal).
+# Used by pay for cross-repo calls to activation's card-lookup endpoint.
+# Port 3002 is Palisade activation's internal listener (registered by
+# Palisade's aws-setup.sh).
+PALISADE_ACTIVATION_INTERNAL_URL="http://${INTERNAL_ALB_DNS}:3002"
 
 # Tracking arrays for the final summary
 CREATED_SECRETS=()
@@ -186,6 +211,13 @@ ensure_secret "vera/WEBAUTHN_RP_ID"               "CHANGEME"
 ensure_secret "vera/WEBAUTHN_ORIGINS"             "CHANGEME"
 ensure_secret "vera/WEBAUTHN_RP_NAME"             "CHANGEME"
 
+# Cross-repo — pay → Palisade activation.  pay HMAC-signs GET /api/cards/
+# lookup/:cardId to read card.status + card.programId from Palisade.  The
+# value of this secret MUST match Palisade activation's PAY_AUTH_KEYS
+# entry keyed "pay".  Palisade's aws-setup.sh manages the inbound-key
+# map; this script only owns the outbound secret on the Vera side.
+ensure_secret "vera/SERVICE_AUTH_PALISADE_SECRET" "CHANGEME"
+
 # vault secrets.
 ensure_secret "vera/SERVICE_AUTH_KEYS"            "CHANGEME"
 ensure_secret "vera/RETRIEVAL_TOKEN_TTL_SECONDS"  "CHANGEME"
@@ -194,6 +226,32 @@ ensure_secret "vera/RETRIEVAL_TOKEN_TTL_SECONDS"  "CHANGEME"
 ensure_secret "vera/ADMIN_API_KEY"                "CHANGEME"
 ensure_secret "vera/SERVICE_AUTH_ADMIN_SECRET"    "CHANGEME"
 
+# ---------------------------------------------------------------------------
+# Deleted post-split — card-domain secrets moved to Palisade.  Palisade's
+# aws-setup.sh migrates these from vera/* to palisade/* on first run.  Do
+# not create new vera/* entries for anything below; the services that read
+# them no longer exist in this repo.
+#
+#   vera/CARD_FIELD_DEK_V1                    -> palisade/CARD_FIELD_DEK_V1
+#   vera/CARD_FIELD_DEK_ACTIVE_VERSION        -> palisade/CARD_FIELD_DEK_ACTIVE_VERSION
+#   vera/CARD_UID_FINGERPRINT_KEY             -> palisade/CARD_UID_FINGERPRINT_KEY
+#   vera/TAP_HANDOFF_SECRET                   -> palisade/TAP_HANDOFF_SECRET
+#   vera/PROVISION_AUTH_KEYS                  -> palisade/PROVISION_AUTH_KEYS
+#   vera/SERVICE_AUTH_ACTIVATION_SECRET       -> palisade/SERVICE_AUTH_ACTIVATION_SECRET
+#   vera/SERVICE_AUTH_PROVISIONING_SECRET     -> palisade/SERVICE_AUTH_PROVISIONING_SECRET
+#   vera/SERVICE_AUTH_BATCH_PROCESSOR_SECRET  -> palisade/SERVICE_AUTH_BATCH_PROCESSOR_SECRET
+#   vera/KMS_SAD_KEY_ARN                      -> palisade/KMS_SAD_KEY_ARN
+#   vera/DATA_PREP_MOCK_EMV                   -> palisade/DATA_PREP_MOCK_EMV
+#   vera/CALLBACK_HMAC_SECRET                 -> palisade/CALLBACK_HMAC_SECRET
+#   vera/EMBOSSING_KEY_V1                     -> palisade/EMBOSSING_KEY_V1
+#   vera/EMBOSSING_KEY_ACTIVE_VERSION         -> palisade/EMBOSSING_KEY_ACTIVE_VERSION
+#   vera/EMBOSSING_BUCKET                     -> palisade/EMBOSSING_BUCKET
+#   vera/POLL_INTERVAL_MS                     -> palisade/POLL_INTERVAL_MS
+#   vera/SFTP_USERS                           -> palisade/SFTP_USERS
+#   vera/SFTP_POLL_INTERVAL_MS                -> palisade/SFTP_POLL_INTERVAL_MS
+#   vera/SFTP_STABILITY_MS                    -> palisade/SFTP_STABILITY_MS
+# ---------------------------------------------------------------------------
+
 # ===========================================================================
 echo ""
 echo "============================================================"
@@ -201,6 +259,10 @@ echo " 2. CLOUDWATCH LOG GROUPS"
 echo "============================================================"
 # ===========================================================================
 
+# Deleted post-split: /ecs/vera-tap, /ecs/vera-activation, /ecs/vera-rca,
+# /ecs/vera-data-prep, /ecs/vera-batch-processor, /ecs/vera-sftp,
+# /ecs/vera-card-ops.  Those log groups live on in CloudWatch for
+# historical search but are no longer managed by this script.
 for svc in pay vault admin; do
   ensure_log_group "/ecs/vera-${svc}"
 done
@@ -219,6 +281,7 @@ ARN_DATABASE_URL=$(get_secret_arn "vera/DATABASE_URL")
 ARN_CORS_ORIGINS=$(get_secret_arn "vera/CORS_ORIGINS")
 ARN_SERVICE_AUTH_PAY_SECRET=$(get_secret_arn "vera/SERVICE_AUTH_PAY_SECRET")
 ARN_SERVICE_AUTH_ADMIN_SECRET=$(get_secret_arn "vera/SERVICE_AUTH_ADMIN_SECRET")
+ARN_SERVICE_AUTH_PALISADE_SECRET=$(get_secret_arn "vera/SERVICE_AUTH_PALISADE_SECRET")
 ARN_PAYMENT_PROVIDER=$(get_secret_arn "vera/PAYMENT_PROVIDER")
 ARN_STRIPE_SECRET_KEY=$(get_secret_arn "vera/STRIPE_SECRET_KEY")
 ARN_STRIPE_PUBLISHABLE_KEY=$(get_secret_arn "vera/STRIPE_PUBLISHABLE_KEY")
@@ -236,6 +299,10 @@ ARN_ADMIN_API_KEY=$(get_secret_arn "vera/ADMIN_API_KEY")
 echo "  All secret ARNs resolved."
 
 # ---- pay (port 3003) ----
+# taskRoleArn is set separately from executionRoleArn: the task role grants
+# *runtime* SecretsManager access for the SERVICE_AUTH_PALISADE_SECRET the
+# pay service fetches lazily inside cross-repo calls, separate from the
+# execution role's image-pull / log / secrets-injection scope.
 echo ""
 echo "--- Registering task definition: vera-pay ---"
 aws ecs register-task-definition \
@@ -248,6 +315,7 @@ aws ecs register-task-definition \
   "cpu": "256",
   "memory": "512",
   "executionRoleArn": "${EXEC_ROLE}",
+  "taskRoleArn": "${PAY_TASK_ROLE}",
   "containerDefinitions": [
     {
       "name": "vera-pay",
@@ -257,20 +325,22 @@ aws ecs register-task-definition \
         { "containerPort": 3003, "protocol": "tcp" }
       ],
       "environment": [
-        { "name": "VAULT_SERVICE_URL", "value": "http://${INTERNAL_ALB_DNS}:3004" }
+        { "name": "VAULT_SERVICE_URL", "value": "http://${INTERNAL_ALB_DNS}:3004" },
+        { "name": "PALISADE_BASE_URL", "value": "${PALISADE_ACTIVATION_INTERNAL_URL}" }
       ],
       "secrets": [
-        { "name": "DATABASE_URL",              "valueFrom": "${ARN_DATABASE_URL}" },
-        { "name": "CORS_ORIGINS",              "valueFrom": "${ARN_CORS_ORIGINS}" },
-        { "name": "SERVICE_AUTH_PAY_SECRET",   "valueFrom": "${ARN_SERVICE_AUTH_PAY_SECRET}" },
-        { "name": "PAYMENT_PROVIDER",          "valueFrom": "${ARN_PAYMENT_PROVIDER}" },
-        { "name": "STRIPE_SECRET_KEY",         "valueFrom": "${ARN_STRIPE_SECRET_KEY}" },
-        { "name": "STRIPE_PUBLISHABLE_KEY",    "valueFrom": "${ARN_STRIPE_PUBLISHABLE_KEY}" },
-        { "name": "TRANSACTION_TTL_SECONDS",   "valueFrom": "${ARN_TRANSACTION_TTL_SECONDS}" },
-        { "name": "VERA_ROOT_ARQC_SEED",      "valueFrom": "${ARN_VERA_ROOT_ARQC_SEED}" },
-        { "name": "WEBAUTHN_RP_ID",            "valueFrom": "${ARN_WEBAUTHN_RP_ID}" },
-        { "name": "WEBAUTHN_ORIGINS",          "valueFrom": "${ARN_WEBAUTHN_ORIGINS}" },
-        { "name": "WEBAUTHN_RP_NAME",          "valueFrom": "${ARN_WEBAUTHN_RP_NAME}" }
+        { "name": "DATABASE_URL",                "valueFrom": "${ARN_DATABASE_URL}" },
+        { "name": "CORS_ORIGINS",                "valueFrom": "${ARN_CORS_ORIGINS}" },
+        { "name": "SERVICE_AUTH_PAY_SECRET",     "valueFrom": "${ARN_SERVICE_AUTH_PAY_SECRET}" },
+        { "name": "SERVICE_AUTH_PALISADE_SECRET","valueFrom": "${ARN_SERVICE_AUTH_PALISADE_SECRET}" },
+        { "name": "PAYMENT_PROVIDER",            "valueFrom": "${ARN_PAYMENT_PROVIDER}" },
+        { "name": "STRIPE_SECRET_KEY",           "valueFrom": "${ARN_STRIPE_SECRET_KEY}" },
+        { "name": "STRIPE_PUBLISHABLE_KEY",      "valueFrom": "${ARN_STRIPE_PUBLISHABLE_KEY}" },
+        { "name": "TRANSACTION_TTL_SECONDS",     "valueFrom": "${ARN_TRANSACTION_TTL_SECONDS}" },
+        { "name": "VERA_ROOT_ARQC_SEED",         "valueFrom": "${ARN_VERA_ROOT_ARQC_SEED}" },
+        { "name": "WEBAUTHN_RP_ID",              "valueFrom": "${ARN_WEBAUTHN_RP_ID}" },
+        { "name": "WEBAUTHN_ORIGINS",            "valueFrom": "${ARN_WEBAUTHN_ORIGINS}" },
+        { "name": "WEBAUTHN_RP_NAME",            "valueFrom": "${ARN_WEBAUTHN_RP_NAME}" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
@@ -382,6 +452,17 @@ aws ecs register-task-definition \
 TASKJSON
 )" --query 'taskDefinition.taskDefinitionArn' --output text
 REGISTERED_TASK_DEFS+=("vera-admin")
+
+# ---------------------------------------------------------------------------
+# Deleted post-split — task definitions moved to Palisade's aws-setup.sh:
+#   vera-tap              -> palisade-tap              (port 3001)
+#   vera-activation       -> palisade-activation       (port 3002)
+#   vera-data-prep        -> palisade-data-prep        (port 3006)
+#   vera-rca              -> palisade-rca              (port 3007)
+#   vera-batch-processor  -> palisade-batch-processor  (port 3008)
+#   vera-sftp             -> palisade-sftp             (port 22)
+#   (new on Palisade)     -> palisade-card-ops         (port 3010)
+# ---------------------------------------------------------------------------
 
 # ===========================================================================
 echo ""
@@ -770,6 +851,58 @@ if [ -n "$INTERNAL_ALB_SG" ] && [ "$INTERNAL_ALB_SG" != "None" ]; then
   ensure_sg_ingress 3004 "$INTERNAL_ALB_SG" "internal-alb-vault"
 fi
 
+# ===========================================================================
+echo ""
+echo "============================================================"
+echo " 8. IAM — pay task role (cross-repo secret access)"
+echo "============================================================"
+# ===========================================================================
+#
+# pay needs runtime SecretsManager:GetSecretValue on SERVICE_AUTH_PALISADE_
+# SECRET so it can HMAC-sign cross-repo calls to Palisade activation.  The
+# execution role already has access for container-start secret injection,
+# but task code reads the secret at request time — hence the separate task
+# role.  Attach via an inline policy (keeps the grant colocated with this
+# script).
+
+PAY_TASK_ROLE_NAME="${PAY_TASK_ROLE##*/}"
+if aws iam get-role --role-name "$PAY_TASK_ROLE_NAME" --query 'Role.RoleName' --output text >/dev/null 2>&1; then
+  echo "  [exists] IAM role $PAY_TASK_ROLE_NAME"
+else
+  echo "  [creating] IAM role $PAY_TASK_ROLE_NAME"
+  aws iam create-role \
+    --role-name "$PAY_TASK_ROLE_NAME" \
+    --assume-role-policy-document '{
+      "Version": "2012-10-17",
+      "Statement": [{
+        "Effect": "Allow",
+        "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+        "Action": "sts:AssumeRole"
+      }]
+    }' \
+    --query 'Role.RoleName' --output text >/dev/null
+  echo "  [created] IAM role $PAY_TASK_ROLE_NAME"
+fi
+
+# Inline policy: SecretsManager read on the Palisade-bound secret.
+aws iam put-role-policy \
+  --role-name "$PAY_TASK_ROLE_NAME" \
+  --policy-name "vera-pay-palisade-secret-read" \
+  --policy-document "$(cat <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [ "secretsmanager:GetSecretValue" ],
+      "Resource": [ "${ARN_SERVICE_AUTH_PALISADE_SECRET}" ]
+    }
+  ]
+}
+POLICY
+)" >/dev/null
+echo "  [updated] Inline policy vera-pay-palisade-secret-read on $PAY_TASK_ROLE_NAME"
+
 echo ""
 echo "============================================================"
 echo " OTHER MANUAL STEPS"
@@ -789,6 +922,7 @@ echo "   - pay.karta.cards    -> $(echo "$PUBLIC_ALB_ARN" | sed 's/.*\///')"
 echo "   - manage.karta.cards -> (same)"
 echo ""
 echo "4. Ensure ECR repositories exist: vera-pay, vera-vault, vera-admin"
+echo "   (card-domain repos moved to Palisade; see Palisade's aws-setup.sh.)"
 echo ""
 echo "5. Ensure the execution role ($EXEC_ROLE) has:"
 echo "   - secretsmanager:GetSecretValue for vera/* secrets"
@@ -796,9 +930,16 @@ echo "   - logs:CreateLogStream, logs:PutLogEvents for /ecs/vera-* groups"
 echo "   - ecr:GetAuthorizationToken, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer"
 echo ""
 echo "6. Palisade's aws-setup.sh provisions the card-domain services"
-echo "   (tap/activation/data-prep/rca/batch-processor/sftp) and is"
-echo "   expected to register a higher-priority ALB rule on manage.karta.cards"
-echo "   routing /palisade-api/* to palisade-admin.  Until that script runs,"
-echo "   /palisade-api/* will 404 via the vera-admin fallback above."
+echo "   (tap / activation / data-prep / rca / batch-processor / sftp /"
+echo "   card-ops) and is expected to register a higher-priority ALB rule"
+echo "   on manage.karta.cards routing /palisade-api/* to palisade-admin."
+echo "   Until that script runs, /palisade-api/* will 404 via the"
+echo "   vera-admin fallback above."
+echo ""
+echo "7. The value stored in vera/SERVICE_AUTH_PALISADE_SECRET MUST be"
+echo "   replicated verbatim into Palisade activation's PAY_AUTH_KEYS"
+echo "   under keyId 'pay'.  Palisade's aws-setup.sh manages the inbound"
+echo "   key map; this script only owns the outbound secret on the Vera"
+echo "   side.  Rotate both together."
 echo ""
 echo "Done."
