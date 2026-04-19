@@ -11,6 +11,7 @@
     { "path": "./packages/service-auth" },
     { "path": "./packages/retention" },
     { "path": "./packages/emv" },
+    { "path": "./packages/sdm-keys" },
     { "path": "./packages/provisioning-client" },
     { "path": "./services/tap" },
     { "path": "./services/activation" },
