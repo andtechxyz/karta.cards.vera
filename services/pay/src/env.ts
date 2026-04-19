@@ -18,6 +18,14 @@ const { get: getPayConfig, reset: _resetPayConfig } = defineEnv({
   ADMIN_API_KEY: hexKey(32),
   TRANSACTION_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   VERA_ROOT_ARQC_SEED: hexKey(32),
+  // --- Cross-repo card lookup (Palisade activation) ------------------------
+  // pay reads card.status + card.programId from Palisade via
+  // GET /api/cards/lookup/:cardId (HMAC-gated, keyId='pay').  The base URL
+  // defaults to Palisade activation's dev port 3002.
+  PALISADE_BASE_URL: z.string().url().default('http://localhost:3002'),
+  // Shared secret for HMAC-signed Palisade calls; must match Palisade
+  // activation's PAY_AUTH_KEYS['pay'] value.
+  SERVICE_AUTH_PALISADE_SECRET: hexKey(32),
 });
 
 export { getPayConfig, _resetPayConfig };

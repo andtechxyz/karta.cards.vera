@@ -46,6 +46,11 @@ const defaults: Record<string, string> = {
   // Service-to-service HMAC — distinct secret per caller; vault's map must
   // carry the same values under each caller's keyId.
   SERVICE_AUTH_PAY_SECRET: HEX32_F,
+  // Pay-side shared secret for calling Palisade /api/cards/lookup.  Must
+  // match Palisade activation's PAY_AUTH_KEYS['pay'] entry in its test env.
+  SERVICE_AUTH_PALISADE_SECRET: HEX32_F,
+  // Palisade activation base URL — dev port 3002.
+  PALISADE_BASE_URL: 'http://localhost:3002',
   SERVICE_AUTH_ACTIVATION_SECRET: HEX32_G,
   SERVICE_AUTH_ADMIN_SECRET: HEX32_H,
   SERVICE_AUTH_KEYS: JSON.stringify({ pay: HEX32_F, activation: HEX32_G, admin: HEX32_H }),
