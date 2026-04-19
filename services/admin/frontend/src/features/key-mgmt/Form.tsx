@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { api, errorMsg } from '../../utils/api';
+import { api as allApi, errorMsg } from '../../utils/api';
+const api = allApi.palisade;
 import type { Program } from '../programs/types';
 import type { ChipProfile } from '../chip-profiles/types';
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, errorMsg } from '../../utils/api';
+import { api as allApi, errorMsg } from '../../utils/api';
+const api = allApi.palisade;
 import { Table, type Column } from '../../components/Table';
 import { ProgramForm } from './Form';
 import type { Program } from './types';

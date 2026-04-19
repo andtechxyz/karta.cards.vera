@@ -18,6 +18,13 @@ const { get: getAdminConfig, reset: _resetAdminConfig } = defineEnv({
   // 'admin' group membership gates access at the middleware level.
   COGNITO_USER_POOL_ID: z.string().default('ap-southeast-2_Db4d1vpIV'),
   COGNITO_CLIENT_ID: z.string().default('7pj9230obhsa6h6vrvk9tru7do'),
+  // Capability flag surfaced at GET /api/capabilities.  Set to false on a
+  // Vera-only deployment so the shared admin SPA hides Palisade tabs.
+  // Empty string → true (docker-compose and local dev default).
+  HAS_PALISADE: z
+    .string()
+    .default('true')
+    .transform((v) => v !== 'false' && v !== '0'),
 });
 
 export { getAdminConfig, _resetAdminConfig };

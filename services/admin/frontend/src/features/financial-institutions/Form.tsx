@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { api, errorMsg } from '../../utils/api';
+import { api as allApi, errorMsg } from '../../utils/api';
+const api = allApi.palisade;
 import { slugify } from '../programs/types';
 import { PartnerCredentialsSection } from './PartnerCredentials';
 import { SftpAccessSection } from './SftpAccess';

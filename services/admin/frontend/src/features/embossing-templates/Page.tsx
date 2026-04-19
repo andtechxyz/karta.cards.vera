@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, errorMsg, getAuthToken } from '../../utils/api';
+import { api as allApi, errorMsg, getAuthToken } from '../../utils/api';
+const api = allApi.palisade;
 import { formatDate } from '../../utils/format';
 import { Table, type Column } from '../../components/Table';
 import type { FinancialInstitution } from '../financial-institutions/types';

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, errorMsg } from '../../utils/api';
+import { api as allApi, errorMsg } from '../../utils/api';
+const api = allApi.palisade;
 import { formatDate } from '../../utils/format';
 import { StatusChip } from '../../components/StatusChip';
 import type { CardCredentialRow } from './types';

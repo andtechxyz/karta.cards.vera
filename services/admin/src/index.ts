@@ -8,6 +8,7 @@ import { getAdminConfig } from './env.js';
 import vaultProxyRouter from './routes/vault-proxy.routes.js';
 import payProxyRouter from './routes/pay-proxy.routes.js';
 import tokenisationProgramsRouter from './routes/tokenisation-programs.routes.js';
+import capabilitiesRouter from './routes/capabilities.routes.js';
 
 // Vera-side admin — vault audit, transactions, and tokenisation-program
 // CRUD (tier limits).  Card-domain admin (programs, cards, embossing,
@@ -36,6 +37,10 @@ app.get('/api/health', (_req, res) => {
 
 // Rate limit all API routes before auth checks.
 app.use('/api', apiRateLimit);
+
+// Capability probe — no auth so the SPA can render the login screen with
+// the right tab groups.
+app.use('/api/capabilities', capabilitiesRouter);
 
 // Cognito JWT with 'admin' group membership required.
 const adminAuth = createCognitoAuthMiddleware({

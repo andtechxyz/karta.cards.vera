@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, errorMsg } from '../../utils/api';
+import { api as allApi, errorMsg } from '../../utils/api';
+const api = allApi.palisade;
 import { formatDate } from '../../utils/format';
 import { Table, type Column } from '../../components/Table';
 import type { ChipProfile } from './types';

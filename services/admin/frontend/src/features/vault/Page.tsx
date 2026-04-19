@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, errorMsg } from '../../utils/api';
+import { api as allApi, errorMsg } from '../../utils/api';
+const api = allApi.vera;
 import { luhnValid } from '../../utils/luhn';
 import { useCards } from '../../hooks/useCards';
 
