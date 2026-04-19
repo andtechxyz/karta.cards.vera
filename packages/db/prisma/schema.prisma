@@ -709,6 +709,23 @@ model Transaction {
   failedAt      DateTime?
   failureReason String?
 
+  // Denormalised card display fields — stamped at Transaction create time
+  // from the Palisade card-lookup response.  Avoids a cross-repo join on
+  // every transaction list/detail read, and keeps post-Phase-3-shrink
+  // Transaction self-describing after the Card table is dropped from Vera.
+  // All nullable: existing rows pre-migration have nulls; in dev we do not
+  // backfill.
+  cardRef        String?
+  panLast4       String?
+  panBin         String?
+  cardholderName String?
+
+  // Pointer to the local VaultEntry row — stamped from the card-lookup at
+  // Transaction create time so post-auth's retrieval-token mint can skip the
+  // Card join entirely (VaultEntry lives in Vera, Card lives in Palisade).
+  // Null until vault linkage, then stable for the lifetime of the row.
+  vaultEntryId String?
+
   accessLogs VaultAccessLog[]
 
   @@index([rlid])
