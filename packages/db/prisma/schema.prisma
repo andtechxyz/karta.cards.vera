@@ -305,6 +305,29 @@ model Program {
 }
 
 // ---------------------------------------------------------------------------
+// TokenisationProgram — Vera-side tier policy.
+//
+// Split from card-domain Program as part of Phase 4c of the Vera/Palisade
+// separation.  Palisade owns the card Program (tier rules used to live there).
+// Vera now holds its own record keyed by the same `id` (by convention), so pay
+// can enforce tier rules at transaction time without reaching into Palisade.
+//
+// The admin UI for tier rules goes through Vera's admin backend.  Tenants with
+// only the Vera (tokenisation) product still see this editor; tenants with
+// only Palisade (issuance) don't touch it.
+// ---------------------------------------------------------------------------
+
+model TokenisationProgram {
+  id        String   @id // conventionally matches Palisade Program.id
+  name      String
+  currency  String   @db.VarChar(3) // ISO 4217
+  tierRules Json // TierRule[] — shape validated by Zod on write
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
 // Cards
 // ---------------------------------------------------------------------------
 

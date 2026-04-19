@@ -7,11 +7,12 @@ import { createCognitoAuthMiddleware } from '@vera/cognito-auth';
 import { getAdminConfig } from './env.js';
 import vaultProxyRouter from './routes/vault-proxy.routes.js';
 import payProxyRouter from './routes/pay-proxy.routes.js';
+import tokenisationProgramsRouter from './routes/tokenisation-programs.routes.js';
 
-// Vera-side admin — vault audit + transaction tabs only.  Card-domain admin
-// (programs, cards, embossing, partner, provisioning, microsites) moved to
-// Palisade in Phase 4a.  Frontend talks to both backends; capability gating
-// is Phase 4d.
+// Vera-side admin — vault audit, transactions, and tokenisation-program
+// CRUD (tier limits).  Card-domain admin (programs, cards, embossing,
+// partner, provisioning, microsites) moved to Palisade in Phase 4a.
+// Frontend talks to both backends; capability gating is Phase 4d.
 
 const config = getAdminConfig();
 const app = express();
@@ -43,6 +44,7 @@ const adminAuth = createCognitoAuthMiddleware({
   requiredGroup: 'admin',
 });
 app.use('/api/admin/vault', adminAuth, vaultProxyRouter);
+app.use('/api/admin/tokenisation-programs', adminAuth, tokenisationProgramsRouter);
 // Pay service proxy for admin UI's transaction tabs
 app.use('/api', adminAuth, payProxyRouter);
 
