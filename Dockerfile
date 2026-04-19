@@ -5,7 +5,8 @@
 # Run:    docker run -p 3003:3003 --env-file .env vera-pay
 #
 # SERVICE must be one of:
-#   tap, activation, pay, vault, admin, data-prep, rca, batch-processor
+#   tap, activation, pay, vault, admin, data-prep, rca, batch-processor,
+#   card-ops
 # ---------------------------------------------------------------------------
 
 # --- Stage 1: install + compile everything -----------------------------------
@@ -32,6 +33,7 @@ COPY packages/retention/package.json         packages/retention/
 COPY packages/emv/package.json              packages/emv/
 COPY packages/provisioning-client/package.json packages/provisioning-client/
 COPY packages/cognito-auth/package.json     packages/cognito-auth/
+COPY packages/admin-config/package.json     packages/admin-config/
 COPY services/tap/package.json               services/tap/
 COPY services/activation/package.json        services/activation/
 COPY services/pay/package.json               services/pay/
@@ -39,6 +41,7 @@ COPY services/vault/package.json             services/vault/
 COPY services/admin/package.json             services/admin/
 COPY services/data-prep/package.json        services/data-prep/
 COPY services/rca/package.json              services/rca/
+COPY services/card-ops/package.json         services/card-ops/
 COPY services/batch-processor/package.json  services/batch-processor/
 COPY services/activation/frontend/package.json services/activation/frontend/
 COPY services/pay/frontend/package.json      services/pay/frontend/
@@ -69,6 +72,11 @@ RUN if [ -d "services/${SERVICE}/frontend/src" ]; then \
     else \
       mkdir -p "services/${SERVICE}/frontend/dist"; \
     fi
+
+# Ensure a cap-files directory exists for every service so the COPY in
+# the runner stage resolves uniformly.  Only card-ops actually populates
+# it (via the checked-in cap-files/ at build context root).
+RUN mkdir -p "services/${SERVICE}/cap-files"
 
 # --- Stage 2: production image (only what the target SERVICE needs) ----------
 FROM node:22-alpine AS runner
@@ -106,6 +114,8 @@ COPY --from=builder /app/packages/provisioning-client/dist/ packages/provisionin
 COPY --from=builder /app/packages/provisioning-client/package.json packages/provisioning-client/
 COPY --from=builder /app/packages/cognito-auth/dist/   packages/cognito-auth/dist/
 COPY --from=builder /app/packages/cognito-auth/package.json packages/cognito-auth/
+COPY --from=builder /app/packages/admin-config/dist/   packages/admin-config/dist/
+COPY --from=builder /app/packages/admin-config/package.json packages/admin-config/
 
 # Copy the target service's compiled output
 ARG SERVICE
@@ -114,6 +124,12 @@ COPY --from=builder /app/services/${SERVICE}/package.json   services/${SERVICE}/
 
 # Copy built frontend (may be empty for tap/vault — builder ensures dir exists)
 COPY --from=builder /app/services/${SERVICE}/frontend/dist/ services/${SERVICE}/frontend/dist/
+
+# card-ops: ship the CAP files the admin operations deploy to cards.
+# The builder stage ensures the directory always exists (empty for
+# non-card-ops services, populated for card-ops), so this COPY is safe
+# to run unconditionally.
+COPY --from=builder /app/services/${SERVICE}/cap-files/ services/${SERVICE}/cap-files/
 
 # Copy scripts/ so one-off tasks (seed, regen-sad-e2e, etc.) can run via
 # `ecs run-task` with a command override.  Not used by the normal service
