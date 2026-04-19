@@ -121,48 +121,21 @@ describe('SessionManager', () => {
   // -------------------------------------------------------------------------
 
   describe('handleMessage — pa_fci', () => {
-    it('returns APDU with phase=scp11_auth and updates phase to SCP11', async () => {
+    it('returns GENERATE_KEYS directly (no SCP11 step) and advances phase to KEYGEN', async () => {
       (prisma.provisioningSession.update as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeSession('SCP11'),
+        makeSession('KEYGEN'),
       );
 
       const responses = await mgr.handleMessage('session_01', { type: 'pa_fci' });
 
       expect(responses).toHaveLength(1);
       expect(responses[0].type).toBe('apdu');
-      expect(responses[0].phase).toBe('scp11_auth');
-      expect(responses[0].hex).toBeDefined();
+      expect(responses[0].phase).toBe('key_generation');
+      // 80 E0 00 00 01 01 — exactly the bytes the Palisade SSD e2e test uses.
+      expect(responses[0].hex).toBe('80E000000101');
       expect(prisma.provisioningSession.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'session_01' },
-          data: { phase: 'SCP11' },
-        }),
-      );
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // handleMessage — response in SCP11 phase
-  // -------------------------------------------------------------------------
-
-  describe('handleMessage — response in SCP11 phase', () => {
-    it('returns GENERATE_KEYS APDU and updates phase to KEYGEN', async () => {
-      (prisma.provisioningSession.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeSession('SCP11'),
-      );
-      (prisma.provisioningSession.update as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeSession('KEYGEN'),
-      );
-
-      const msg: WSMessage = { type: 'response', hex: '', sw: '9000' };
-      const responses = await mgr.handleMessage('session_01', msg);
-
-      expect(responses).toHaveLength(1);
-      expect(responses[0].type).toBe('apdu');
-      expect(responses[0].phase).toBe('key_generation');
-      expect(responses[0].progress).toBe(0.35);
-      expect(prisma.provisioningSession.update).toHaveBeenCalledWith(
-        expect.objectContaining({
           data: { phase: 'KEYGEN' },
         }),
       );

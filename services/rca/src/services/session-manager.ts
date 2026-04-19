@@ -104,22 +104,35 @@ export class SessionManager {
   // -----------------------------------------------------------------------
 
   /**
-   * Phase 0: PA FCI received → send SCP11 PSO APDU.
+   * Phase 0: PA FCI received → send GENERATE_KEYS directly (no SCP11).
+   *
+   * Palisade dropped SCP11c entirely (it never worked end-to-end with the
+   * real PA applet — see palisade/tools/test_ssd_e2e.py which is the
+   * working reference flow).  The sequence is:
+   *   SELECT PA → FCI → GENERATE_KEYS → TRANSFER_SAD (direct delivery)
+   *               → re-SELECT PA → FINAL_STATUS → CONFIRM
+   *
+   * No PSO, no ECDH, no script wrapping.  The SAD is transferred as
+   * cleartext over the WebSocket relay because the relay is already
+   * inside our trust boundary (HMAC-signed APDU stream from the mobile
+   * app the cardholder is logged into).
    */
   private async handlePaFci(sessionId: string): Promise<WSMessage[]> {
     await prisma.provisioningSession.update({
       where: { id: sessionId },
-      data: { phase: 'SCP11' },
+      data: { phase: 'KEYGEN' },
     });
 
-    // SCP11c placeholder — in production, this builds the real PSO APDU.
-    // For prototype: send a dummy PSO that the PA accepts.
-    const psoHex = '80CA006500'; // GET DATA — placeholder for SCP11
+    // GENERATE_KEYS = 80 E0 00 00 01 01 — single-byte payload `01`
+    // means "ECC P-256 keypair please".  No session ID — passing one
+    // appends 16 bytes the PA discards (or worse).  Matches the exact
+    // hex in the Palisade SSD e2e trace.
+    const keygenHex = APDUBuilder.generateKeys();
 
     return [{
       type: 'apdu',
-      hex: psoHex,
-      phase: 'scp11_auth',
+      hex: keygenHex,
+      phase: 'key_generation',
       progress: 0.1,
     }];
   }
@@ -148,8 +161,6 @@ export class SessionManager {
     if (!session) return [];
 
     switch (session.phase) {
-      case 'SCP11':
-        return this.handleScp11Response(sessionId);
       case 'KEYGEN':
         return this.handleKeygenResponse(sessionId, msg);
       case 'SAD_TRANSFER':
@@ -159,25 +170,6 @@ export class SessionManager {
       default:
         return [];
     }
-  }
-
-  /**
-   * Phase 1 complete → send GENERATE_KEYS.
-   */
-  private async handleScp11Response(sessionId: string): Promise<WSMessage[]> {
-    await prisma.provisioningSession.update({
-      where: { id: sessionId },
-      data: { phase: 'KEYGEN' },
-    });
-
-    const keygenHex = APDUBuilder.generateKeys(sessionId.replace(/-/g, '').slice(0, 32));
-
-    return [{
-      type: 'apdu',
-      hex: keygenHex,
-      phase: 'key_generation',
-      progress: 0.35,
-    }];
   }
 
   /**
