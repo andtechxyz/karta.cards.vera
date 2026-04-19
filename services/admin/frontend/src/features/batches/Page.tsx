@@ -67,8 +67,8 @@ export function BatchesPage() {
         activation's card register endpoint with HMAC-signed auth.
       </p>
       <p className="small" style={{ marginTop: 4 }}>
-        Required columns: card_ref, ntag_uid, chip_serial, sdm_meta_read_key,
-        sdm_file_read_key, pan, expiry_month, expiry_year, cardholder_name
+        Required columns: card_ref, ntag_uid, chip_serial, pan, expiry_month,
+        expiry_year, cardholder_name
       </p>
 
       <label>Program</label>

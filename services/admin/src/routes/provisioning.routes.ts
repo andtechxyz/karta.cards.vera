@@ -159,12 +159,14 @@ router.get('/provisioning/sessions', async (req, res) => {
 // ---------------------------------------------------------------------------
 
 // Expected CSV columns (header row required):
-// card_ref, ntag_uid, chip_serial, sdm_meta_read_key, sdm_file_read_key,
-// pan, expiry_month, expiry_year, cardholder_name, service_code,
-// card_sequence_number
+// card_ref, ntag_uid, chip_serial, pan, expiry_month, expiry_year,
+// cardholder_name, service_code, card_sequence_number
+//
+// SDM meta/file read keys are intentionally NOT accepted — they are derived
+// on demand by tap-service via AES-CMAC(MASTER_<role>, UID).
 
 const REQUIRED_CSV_HEADERS = [
-  'card_ref', 'ntag_uid', 'chip_serial', 'sdm_meta_read_key', 'sdm_file_read_key',
+  'card_ref', 'ntag_uid', 'chip_serial',
   'pan', 'expiry_month', 'expiry_year', 'cardholder_name',
 ] as const;
 
@@ -260,8 +262,6 @@ router.post('/batches/ingest', async (req, res) => {
         cardRef,
         uid: row.ntag_uid,
         chipSerial: row.chip_serial || undefined,
-        sdmMetaReadKey: row.sdm_meta_read_key,
-        sdmFileReadKey: row.sdm_file_read_key,
         programId,
         batchId,
         card: {

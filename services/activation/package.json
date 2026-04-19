@@ -12,6 +12,7 @@
     "@vera/db": "*",
     "@vera/handoff": "*",
     "@vera/retention": "*",
+    "@vera/sdm-keys": "*",
     "@vera/service-auth": "*",
     "@vera/vault-client": "*",
     "@vera/cognito-auth": "*",
