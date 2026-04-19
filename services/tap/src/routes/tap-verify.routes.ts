@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@vera/db';
 import { badRequest, gone, notFound, unauthorized, validateBody } from '@vera/core';
@@ -17,19 +17,14 @@ import { getCardFieldKeyProvider } from '../key-provider.js';
 // is authentic and (if so) mint a 30s `provisioning` handoff token the app
 // can swap at /api/provisioning/start.
 //
-// Two route shapes, same logic:
+//   POST /api/tap/verify/:urlCode
 //
-//   1. POST /api/tap/verify/:urlCode  — Phase-1 url-coded.  Scopes the
-//      trial-decrypt to one program (faster as the fleet grows).  The
-//      MAC input includes the urlCode in the path, matching what the chip
-//      signed under https://mobile.karta.cards/t/<urlCode>.
-//
-//   2. POST /api/tap/verify           — catch-all.  Trial-decrypts across
-//      EVERY ACTIVATED/PROVISIONED card.  Used by the mobile app today
-//      because its current call doesn't carry the urlCode.  We auto-probe
-//      every program's URL shape to find the one whose MAC matches.
-//      Acceptable while the fleet is small; revert to (1) when we add the
-//      urlCode to the app's API call.
+// The urlCode comes from the chip's stored NDEF URL:
+//   https://mobile.karta.cards/t/<urlCode>?e=<picc>&m=<cmac>
+// The mobile app parses the path segment and POSTs it back to us; we use
+// it to (a) scope trial-decrypt to one program (O(cards-in-program) today,
+// O(1) in Phase 2 HSM-derived keys), (b) reconstruct the MAC input to
+// match exactly what the chip signed.
 //
 // Auth is the SUN signature itself — no Cognito.  Rate-limited upstream.
 
@@ -45,9 +40,6 @@ const URL_CODE_RE = /^[a-z0-9]{2,8}$/;
 
 const router: Router = Router();
 
-// ---------------------------------------------------------------------------
-// Route 1: url-coded variant
-// ---------------------------------------------------------------------------
 router.post('/verify/:urlCode', validateBody(verifySchema), async (req, res) => {
   const urlCode = req.params.urlCode;
   if (!URL_CODE_RE.test(urlCode)) {
@@ -65,36 +57,11 @@ router.post('/verify/:urlCode', validateBody(verifySchema), async (req, res) => 
     throw notFound('program_not_found', `No program with urlCode "${urlCode}"`);
   }
 
-  await runVerify(req, res, {
+  await runVerify(res, {
     piccHex,
     macHex,
     programId: program.id,
-    candidateUrlCodes: [program.urlCode!],
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Route 2: catch-all variant (current mobile app shape)
-// ---------------------------------------------------------------------------
-router.post('/verify', validateBody(verifySchema), async (req, res) => {
-  const { e: piccHex, m: macHex } = req.body as { e: string; m: string };
-
-  // Pull every program's urlCode so we can re-derive the MAC input under
-  // each one.  In practice there are 1–5 programs; with one matching card
-  // the right urlCode is whichever lets the MAC verify.
-  const programs = await prisma.program.findMany({
-    where: { urlCode: { not: null } },
-    select: { urlCode: true },
-  });
-  const urlCodes = programs
-    .map((p) => p.urlCode)
-    .filter((u): u is string => !!u);
-
-  await runVerify(req, res, {
-    piccHex,
-    macHex,
-    programId: undefined, // trial-decrypt across ALL programs
-    candidateUrlCodes: urlCodes,
+    urlCode: program.urlCode!,
   });
 });
 
@@ -104,18 +71,11 @@ router.post('/verify', validateBody(verifySchema), async (req, res) => {
 interface RunVerifyInput {
   piccHex: string;
   macHex: string;
-  programId: string | undefined;
-  /**
-   * Which urlCodes to try when reconstructing the MAC input.  For the
-   * url-coded route this is exactly one (the path param).  For the
-   * catch-all route this is every program's urlCode — we accept the first
-   * one whose MAC verifies under the matched card's session key.
-   */
-  candidateUrlCodes: string[];
+  programId: string;
+  urlCode: string;
 }
 
 async function runVerify(
-  _req: Request,
   res: Response,
   input: RunVerifyInput,
 ): Promise<void> {
@@ -134,11 +94,13 @@ async function runVerify(
 
   let valid = false;
   try {
-    // Reconstruct the MAC input the chip signed.  We don't know which
-    // urlCode the chip's URL contained (it isn't carried in the API call),
-    // so try each candidate until one matches.  Per AN14683 the MAC
-    // covers the URL substring from host through `&m=` — different
-    // urlCodes produce different inputs, so only the right one verifies.
+    // Reconstruct the exact URL the chip signed.  Per AN14683 the MAC
+    // covers host+path through `&m=`; host+path is fixed to
+    // `mobile.karta.cards/t/<urlCode>` by the program template.
+    const fullUrl =
+      `https://mobile.karta.cards/t/${input.urlCode}` +
+      `?e=${input.piccHex.toUpperCase()}&m=${input.macHex.toUpperCase()}`;
+    const macInput = extractSdmmacInput(fullUrl);
     const { mac: macSessionKey } = deriveSessionKeys(
       match.sdmFileReadKey,
       match.uid,
@@ -148,16 +110,7 @@ async function runVerify(
         (match.counter >> 16) & 0xff,
       ]),
     );
-    for (const urlCode of input.candidateUrlCodes) {
-      const fullUrl =
-        `https://mobile.karta.cards/t/${urlCode}` +
-        `?e=${input.piccHex.toUpperCase()}&m=${input.macHex.toUpperCase()}`;
-      const macInput = extractSdmmacInput(fullUrl);
-      if (verifySdmmac(macSessionKey, macInput, input.macHex)) {
-        valid = true;
-        break;
-      }
-    }
+    valid = verifySdmmac(macSessionKey, macInput, input.macHex);
   } finally {
     match.sdmMetaReadKey.fill(0);
     match.sdmFileReadKey.fill(0);

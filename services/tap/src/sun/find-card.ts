@@ -20,14 +20,12 @@ import { decryptPiccData } from './picc.js';
 
 export interface FindCardByPiccInput {
   /**
-   * Optional program scope.  When set, only Cards in this program are tried
-   * (Phase-1 url-coded shape).  When omitted, every ACTIVATED+PROVISIONED
-   * Card across the entire fleet is tried — used by the mobile-app's
-   * cardRef-less tap-verify endpoint where the URL doesn't carry a
-   * discriminator.  O(N) across the whole fleet; acceptable while N is
-   * small (~10s of cards).  Phase 2 (UDK derivation) makes this O(1).
+   * Program scope.  Trial-decrypt iterates only Cards in this program.
+   * Populated from the `urlCode` in the chip's URL (→ Program lookup).
+   * Phase 2 (HSM-derived UDK) replaces the iteration with an O(1) lookup
+   * by UID prefix — this interface stays the same.
    */
-  programId?: string;
+  programId: string;
   piccHex: string;
   /** Card-field DEK provider — used to decrypt the per-card SDM keys. */
   keyProvider: KeyProvider;
@@ -55,7 +53,7 @@ export async function findCardByPicc(
 ): Promise<FindCardByPiccMatch | null> {
   const candidates = await prisma.card.findMany({
     where: {
-      ...(input.programId ? { programId: input.programId } : {}),
+      programId: input.programId,
       status: { in: ['ACTIVATED', 'PROVISIONED'] },
     },
     select: {
