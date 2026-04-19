@@ -51,7 +51,10 @@ import type { CardData, IssuerProfileForSad } from '@vera/emv';
 // constructed if mockMode=true is enforced at the callsite).  Importing it
 // from the service package keeps the iCVV derivation in lock-step with what
 // data-prep itself would produce for this card.
-import { EmvDerivationService } from '../services/data-prep/src/services/emv-derivation.js';
+// Import from dist/ rather than src/ so the script is usable inside the
+// production runtime image (which only ships dist/), not just against a
+// local repo that's been `pnpm build`-ed.
+import { EmvDerivationService } from '../services/data-prep/dist/services/emv-derivation.js';
 
 // ---------------------------------------------------------------------------
 // CLI
