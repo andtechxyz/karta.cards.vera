@@ -12,7 +12,7 @@ import { aesCmac } from '@vera/core';
 
 vi.mock('@vera/db', () => ({
   prisma: {
-    program: { findUnique: vi.fn() },
+    program: { findUnique: vi.fn(), findMany: vi.fn() },
     card: {
       findMany: vi.fn(),
       updateMany: vi.fn(),
@@ -107,6 +107,7 @@ beforeEach(() => {
 });
 
 const programFind = () => prisma.program.findUnique as unknown as ReturnType<typeof vi.fn>;
+const programFindMany = () => prisma.program.findMany as unknown as ReturnType<typeof vi.fn>;
 const cardFindMany = () => prisma.card.findMany as unknown as ReturnType<typeof vi.fn>;
 const cardUpdateMany = () => prisma.card.updateMany as unknown as ReturnType<typeof vi.fn>;
 
@@ -179,7 +180,7 @@ function makeChipFixture(opts: {
 describe('POST /api/tap/verify/:urlCode', () => {
   it('happy path — real PICC + MAC under the matching card → 200 + handoff', async () => {
     const fx = makeChipFixture({ urlCode: 'kp' });
-    programFind().mockResolvedValueOnce({ id: 'karta_platinum', name: 'Karta Platinum' });
+    programFind().mockResolvedValueOnce({ id: 'karta_platinum', urlCode: 'kp' });
     cardFindMany().mockResolvedValueOnce([{
       id: 'card_1',
       status: 'ACTIVATED',
@@ -207,7 +208,7 @@ describe('POST /api/tap/verify/:urlCode', () => {
 
   it('finds the right card when multiple candidates exist (trial-decrypt loop)', async () => {
     const fx = makeChipFixture({ urlCode: 'kp', uid: Buffer.from('aabbccddeeff11', 'hex') });
-    programFind().mockResolvedValueOnce({ id: 'karta_platinum', name: 'Karta Platinum' });
+    programFind().mockResolvedValueOnce({ id: 'karta_platinum', urlCode: 'kp' });
     cardFindMany().mockResolvedValueOnce([
       // Decoy with random keys — won't decrypt the PICC validly
       {
@@ -244,7 +245,7 @@ describe('POST /api/tap/verify/:urlCode', () => {
   });
 
   it('404 card_not_found when no card decrypts the PICC', async () => {
-    programFind().mockResolvedValueOnce({ id: 'karta_platinum', name: 'Karta Platinum' });
+    programFind().mockResolvedValueOnce({ id: 'karta_platinum', urlCode: 'kp' });
     cardFindMany().mockResolvedValueOnce([{
       id: 'card_x',
       status: 'ACTIVATED',
@@ -262,7 +263,7 @@ describe('POST /api/tap/verify/:urlCode', () => {
 
   it('401 sun_invalid when MAC has been tampered', async () => {
     const fx = makeChipFixture({ urlCode: 'kp' });
-    programFind().mockResolvedValueOnce({ id: 'karta_platinum', name: 'Karta Platinum' });
+    programFind().mockResolvedValueOnce({ id: 'karta_platinum', urlCode: 'kp' });
     cardFindMany().mockResolvedValueOnce([{
       id: 'card_1',
       status: 'ACTIVATED',
@@ -281,7 +282,7 @@ describe('POST /api/tap/verify/:urlCode', () => {
 
   it('410 sun_counter_replay when the counter is not strictly greater than stored', async () => {
     const fx = makeChipFixture({ urlCode: 'kp', counter: 5 });
-    programFind().mockResolvedValueOnce({ id: 'karta_platinum', name: 'Karta Platinum' });
+    programFind().mockResolvedValueOnce({ id: 'karta_platinum', urlCode: 'kp' });
     cardFindMany().mockResolvedValueOnce([{
       id: 'card_1',
       status: 'ACTIVATED',
@@ -308,5 +309,69 @@ describe('POST /api/tap/verify/:urlCode', () => {
   it('400 on malformed body', async () => {
     const res = await inject(buildApp(), 'POST', '/api/tap/verify/kp', { e: 'short' });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/tap/verify (catch-all, no urlCode)', () => {
+  it('happy path — finds the right program by trying every urlCode', async () => {
+    const fx = makeChipFixture({ urlCode: 'kp' });
+    // Multiple programs in the catalogue; only `kp` will MAC-verify
+    programFindMany().mockResolvedValueOnce([
+      { urlCode: 'sg' },
+      { urlCode: 'kp' },
+      { urlCode: 'tm' },
+    ]);
+    cardFindMany().mockResolvedValueOnce([{
+      id: 'card_1',
+      status: 'ACTIVATED',
+      lastReadCounter: 0,
+      keyVersion: 1,
+      sdmMetaReadKeyEncrypted: fx.metaKeyHex,
+      sdmFileReadKeyEncrypted: fx.fileKeyHex,
+    }]);
+    cardUpdateMany().mockResolvedValueOnce({ count: 1 });
+
+    const res = await inject(buildApp(), 'POST', '/api/tap/verify', { e: fx.piccHex, m: fx.macHex });
+    expect(res.status).toBe(200);
+    expect(res.body.cardId).toBe('card_1');
+    expect(typeof res.body.handoff).toBe('string');
+  });
+
+  it('401 sun_invalid when no urlCode candidate verifies', async () => {
+    const fx = makeChipFixture({ urlCode: 'kp' });
+    // Only return programs that will NOT match — kp is missing
+    programFindMany().mockResolvedValueOnce([
+      { urlCode: 'sg' },
+      { urlCode: 'tm' },
+    ]);
+    cardFindMany().mockResolvedValueOnce([{
+      id: 'card_1',
+      status: 'ACTIVATED',
+      lastReadCounter: 0,
+      keyVersion: 1,
+      sdmMetaReadKeyEncrypted: fx.metaKeyHex,
+      sdmFileReadKeyEncrypted: fx.fileKeyHex,
+    }]);
+
+    const res = await inject(buildApp(), 'POST', '/api/tap/verify', { e: fx.piccHex, m: fx.macHex });
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('sun_invalid');
+  });
+
+  it('404 card_not_found when no card decrypts (catch-all path)', async () => {
+    programFindMany().mockResolvedValueOnce([{ urlCode: 'kp' }]);
+    cardFindMany().mockResolvedValueOnce([{
+      id: 'card_x',
+      status: 'ACTIVATED',
+      lastReadCounter: 0,
+      keyVersion: 1,
+      sdmMetaReadKeyEncrypted: '00'.repeat(16),
+      sdmFileReadKeyEncrypted: '00'.repeat(16),
+    }]);
+    const res = await inject(buildApp(), 'POST', '/api/tap/verify', {
+      e: 'A'.repeat(32), m: 'B'.repeat(16),
+    });
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('card_not_found');
   });
 });
