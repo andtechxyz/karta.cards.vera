@@ -15,6 +15,16 @@ export interface IssuerProfile {
   imkAlgorithm: string;
   derivationMethod: string;
 
+  // PA TRANSFER_SAD metadata tail (nullable on legacy rows that
+  // predate Track 2).  `bankId` + `progId` are 4-byte unsigned ints
+  // (wire format: big-endian); `postProvisionUrl` is the hostname
+  // (no protocol) baked into the post-activation NDEF URL.  The
+  // list endpoint omits `postProvisionUrl` — only the detail
+  // endpoint returns it.
+  bankId: number | null;
+  progId: number | null;
+  postProvisionUrl: string | null;
+
   tmkKeyArn: string;
   imkAcKeyArn: string;
   imkSmiKeyArn: string;
@@ -54,10 +64,11 @@ export interface IssuerProfile {
   chipProfile?: { id: string; name: string; scheme: string } | null;
 }
 
-// The list endpoint masks all ARN fields to `***xxxx` (last 4).  Shape
-// is otherwise identical; we keep one type and trust the caller to
-// remember which endpoint it hit.
-export type IssuerProfileListItem = IssuerProfile;
+// The list endpoint masks all ARN fields to `***xxxx` (last 4) and
+// strips `postProvisionUrl` entirely (detail-only).  We keep one type
+// and trust the caller to remember which endpoint it hit — the list
+// page never reads postProvisionUrl anyway.
+export type IssuerProfileListItem = Omit<IssuerProfile, 'postProvisionUrl'>;
 
 export const SCHEME_OPTIONS: { value: IssuerScheme; label: string }[] = [
   { value: 'mchip_advance', label: 'Mastercard M/Chip Advance' },

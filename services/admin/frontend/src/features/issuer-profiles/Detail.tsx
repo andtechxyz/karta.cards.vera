@@ -35,6 +35,12 @@ function initialState(profile: IssuerProfile | 'new', programs: Program[], chipP
       cvn: '18',
       imkAlgorithm: 'TDES_2KEY',
       derivationMethod: 'METHOD_A',
+      // PA TRANSFER_SAD metadata tail — decimal strings in the form;
+      // parsed back to numbers in `save()`.  Blank on new so the
+      // backend stores NULL until an operator fills them in.
+      bankId: '',
+      progId: '',
+      postProvisionUrl: '',
       tmkKeyArn: '',
       imkAcKeyArn: '',
       imkSmiKeyArn: '',
@@ -73,6 +79,9 @@ function initialState(profile: IssuerProfile | 'new', programs: Program[], chipP
     cvn: String(profile.cvn),
     imkAlgorithm: profile.imkAlgorithm ?? '',
     derivationMethod: profile.derivationMethod ?? '',
+    bankId: profile.bankId == null ? '' : String(profile.bankId),
+    progId: profile.progId == null ? '' : String(profile.progId),
+    postProvisionUrl: profile.postProvisionUrl ?? '',
     tmkKeyArn: profile.tmkKeyArn ?? '',
     imkAcKeyArn: profile.imkAcKeyArn ?? '',
     imkSmiKeyArn: profile.imkSmiKeyArn ?? '',
@@ -155,12 +164,28 @@ export function IssuerProfileDetail({
 
   const hexErrors = HEX_FIELDS.filter((f: HexField) => form[f] && !isHex(form[f]));
 
+  // PA TRANSFER_SAD numeric fields — input must parse as a non-negative
+  // integer <= 0xFFFFFFFF (matches the backend Zod bounds).  An empty
+  // string is legal (clears the column back to NULL on patch, omitted
+  // on create).
+  const numericBoundsError = (v: string): string | null => {
+    if (v === '') return null;
+    if (!/^[0-9]+$/.test(v)) return 'must be a decimal integer';
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0 || n > 0xFFFFFFFF) return 'must fit in 4 bytes (0..4294967295)';
+    return null;
+  };
+  const bankIdErr = numericBoundsError(form.bankId);
+  const progIdErr = numericBoundsError(form.progId);
+
   const save = async () => {
     setErr(null);
     if (hexErrors.length > 0) {
       setErr(`Non-hex characters in: ${hexErrors.join(', ')}`);
       return;
     }
+    if (bankIdErr) { setErr(`bankId ${bankIdErr}`); return; }
+    if (progIdErr) { setErr(`progId ${progIdErr}`); return; }
     if (!form.programId || !form.chipProfileId || !form.scheme || !form.cvn) {
       setErr('programId, chipProfileId, scheme, and cvn are required');
       return;
@@ -171,9 +196,23 @@ export function IssuerProfileDetail({
       // on create.  On edit we keep empties so a user can clear a
       // field (backend treats "" as a legal value for all hex/ARN
       // columns — that's their schema default).
+      // bankId + progId are nullable ints on the backend; postProvisionUrl
+      // is a nullable string.  On create we already skipped empties above;
+      // on edit a cleared field becomes `null` so the column drops back to
+      // NULL (cannot encode "clear" as `""` because that's a legal url).
+      const NUMERIC_KEYS = new Set(['bankId', 'progId']);
+      const NULLABLE_KEYS = new Set(['bankId', 'progId', 'postProvisionUrl']);
       const body: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(form)) {
         if (isNew && v === '') continue;
+        if (NULLABLE_KEYS.has(k) && v === '') {
+          body[k] = null;
+          continue;
+        }
+        if (NUMERIC_KEYS.has(k)) {
+          body[k] = Number(v);
+          continue;
+        }
         body[k] = k === 'cvn' ? Number(v) : v;
       }
       if (isNew) {
@@ -302,6 +341,51 @@ export function IssuerProfileDetail({
             placeholder="KARTA"
           />
         </div>
+      </div>
+
+      <h3 style={{ marginTop: 20 }}>PA TRANSFER_SAD metadata tail</h3>
+      <p className="small">
+        Real per-FI identifiers the PA applet writes to NVM during
+        <code> processTransferSad</code>.  <b>bankId</b> / <b>progId</b> are
+        4-byte unsigned integers (decimal here; PA wire format is 4-byte
+        big-endian).  <b>postProvisionUrl</b> is the hostname (no protocol)
+        baked into the post-activation NDEF URL — capped at 255 bytes by
+        the applet.  Legacy rows (pre-Track 2) leave these blank; new rows
+        should set them or RCA will refuse to ship the plan unless
+        <code> RCA_ALLOW_MINIMAL_SAD=1</code> is set for dev.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div>
+          <label>bankId (decimal, 0 .. 4294967295)</label>
+          <input
+            className="mono"
+            value={form.bankId}
+            onChange={(e) => set('bankId', e.target.value)}
+            placeholder="e.g. 1122867 for 0x00112233"
+            inputMode="numeric"
+          />
+          {bankIdErr && <p className="small" style={{ color: 'var(--err, #c33)' }}>bankId {bankIdErr}</p>}
+        </div>
+        <div>
+          <label>progId (decimal, 0 .. 4294967295)</label>
+          <input
+            className="mono"
+            value={form.progId}
+            onChange={(e) => set('progId', e.target.value)}
+            placeholder="e.g. 66 for 0x00000042"
+            inputMode="numeric"
+          />
+          {progIdErr && <p className="small" style={{ color: 'var(--err, #c33)' }}>progId {progIdErr}</p>}
+        </div>
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <label>postProvisionUrl (hostname, no protocol)</label>
+        <input
+          value={form.postProvisionUrl}
+          onChange={(e) => set('postProvisionUrl', e.target.value)}
+          placeholder="tap.karta.cards"
+          maxLength={255}
+        />
       </div>
 
       <h3 style={{ marginTop: 20 }}>EMV Constants</h3>
@@ -450,7 +534,14 @@ export function IssuerProfileDetail({
         <button
           className="btn primary"
           onClick={save}
-          disabled={busy || hexErrors.length > 0 || !form.programId || !form.chipProfileId}
+          disabled={
+            busy
+            || hexErrors.length > 0
+            || bankIdErr !== null
+            || progIdErr !== null
+            || !form.programId
+            || !form.chipProfileId
+          }
         >
           {busy ? 'Saving…' : isNew ? 'Create issuer profile' : 'Save changes'}
         </button>
