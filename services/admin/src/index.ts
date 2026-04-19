@@ -5,17 +5,13 @@ import helmet from 'helmet';
 import { errorMiddleware, serveFrontend, apiRateLimit } from '@vera/core';
 import { createCognitoAuthMiddleware } from '@vera/cognito-auth';
 import { getAdminConfig } from './env.js';
-import programsRouter from './routes/programs.routes.js';
-import cardsRouter from './routes/cards.routes.js';
 import vaultProxyRouter from './routes/vault-proxy.routes.js';
-import provisioningRouter from './routes/provisioning.routes.js';
 import payProxyRouter from './routes/pay-proxy.routes.js';
-import micrositesRouter from './routes/microsites.routes.js';
-import financialInstitutionsRouter from './routes/financial-institutions.routes.js';
-import embossingTemplatesRouter from './routes/embossing-templates.routes.js';
-import embossingBatchesRouter from './routes/embossing-batches.routes.js';
-import partnerCredentialsRouter from './routes/partner-credentials.routes.js';
-import partnerIngestionRouter, { partnerHmacMiddleware } from './routes/partner-ingestion.routes.js';
+
+// Vera-side admin — vault audit + transaction tabs only.  Card-domain admin
+// (programs, cards, embossing, partner, provisioning, microsites) moved to
+// Palisade in Phase 4a.  Frontend talks to both backends; capability gating
+// is Phase 4d.
 
 const config = getAdminConfig();
 const app = express();
@@ -41,32 +37,12 @@ app.get('/api/health', (_req, res) => {
 app.use('/api', apiRateLimit);
 
 // Cognito JWT with 'admin' group membership required.
-// MFA is enforced at the Cognito pool level — the JWT is only issued after
-// password + TOTP.  Group check gates access to admin-only resources.
 const adminAuth = createCognitoAuthMiddleware({
   userPoolId: config.COGNITO_USER_POOL_ID,
   clientId: config.COGNITO_CLIENT_ID,
   requiredGroup: 'admin',
 });
-app.use('/api/programs', adminAuth, programsRouter);
-app.use('/api/cards', adminAuth, cardsRouter);
 app.use('/api/admin/vault', adminAuth, vaultProxyRouter);
-app.use('/api/admin/financial-institutions', adminAuth, financialInstitutionsRouter);
-// Embossing template CRUD sits under the same FI path prefix, nested by :fiId.
-// Mounted on the same base so /api/admin/financial-institutions/:fiId/embossing-templates
-// resolves through the embossing-templates router.
-app.use('/api/admin/financial-institutions', adminAuth, embossingTemplatesRouter);
-// Partner credential management (Cognito-gated — admin UI only)
-app.use('/api/admin/financial-institutions', adminAuth, partnerCredentialsRouter);
-// Partner ingestion endpoint (HMAC-authenticated — partner's secret, NOT Cognito).
-// Mounted OUTSIDE /api/admin so adminAuth doesn't intercept partner calls.
-app.use('/api/partners', partnerHmacMiddleware(), partnerIngestionRouter);
-app.use('/api/admin', adminAuth, provisioningRouter);
-// Microsite uploads handle their own multipart body parsing (no global
-// express.json() interference) and must sit on /api/admin/programs/...
-app.use('/api/admin', adminAuth, micrositesRouter);
-// Embossing batches — program-scoped multipart uploads, same pattern as microsites.
-app.use('/api/admin/programs', adminAuth, embossingBatchesRouter);
 // Pay service proxy for admin UI's transaction tabs
 app.use('/api', adminAuth, payProxyRouter);
 
