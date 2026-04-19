@@ -71,10 +71,40 @@ export function createCognitoAuthMiddleware(config: CognitoAuthConfig): RequestH
     const token = auth.slice(7);
 
     try {
-      const { payload } = await jwtVerify(token, jwks, {
-        issuer,
-        audience: config.clientId,
-      });
+      // We accept BOTH Cognito ID tokens and access tokens.  The two have
+      // different shapes:
+      //   ID token     → has `aud` = clientId, `token_use="id"`
+      //   Access token → has `client_id` = clientId, `token_use="access"`
+      //                  and NO `aud` claim
+      //
+      // jose's `audience` option only checks the standard `aud` claim, so
+      // configuring it would reject every access token outright.  Verify
+      // signature + issuer here, then dispatch on token_use to check the
+      // right client-binding claim ourselves.
+      //
+      // Mobile API callers typically send the access token (it's what
+      // AWS Amplify / cognito-identity returns from `getCurrentUser`),
+      // so failing access tokens here breaks every authenticated call.
+      const { payload } = await jwtVerify(token, jwks, { issuer });
+
+      const tokenUse = payload['token_use'];
+      if (tokenUse === 'access') {
+        if (payload['client_id'] !== config.clientId) {
+          throw new Error(
+            `"client_id" claim mismatch: got ${String(payload['client_id'])}, expected ${config.clientId}`,
+          );
+        }
+      } else if (tokenUse === 'id') {
+        if (payload.aud !== config.clientId) {
+          throw new Error(
+            `"aud" claim mismatch: got ${String(payload.aud)}, expected ${config.clientId}`,
+          );
+        }
+      } else {
+        throw new Error(
+          `unsupported "token_use": ${String(tokenUse)} (expected "access" or "id")`,
+        );
+      }
 
       const user = extractUser(payload);
 

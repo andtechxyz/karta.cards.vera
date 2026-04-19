@@ -82,7 +82,7 @@ describe('createCognitoAuthMiddleware', () => {
 
   it('sets req.cognitoUser and calls next() on valid JWT', async () => {
     vi.mocked(jwtVerify).mockResolvedValue({
-      payload: { sub: 'user-uuid-123', email: 'test@example.com' },
+      payload: { sub: 'user-uuid-123', email: 'test@example.com', token_use: 'id', aud: '7pj9230obhsa6h6vrvk9tru7do' },
       protectedHeader: { alg: 'RS256' },
       key: {} as any,
     } as any);
@@ -104,7 +104,7 @@ describe('createCognitoAuthMiddleware', () => {
 
   it('sets sub to empty string when payload.sub is missing', async () => {
     vi.mocked(jwtVerify).mockResolvedValue({
-      payload: { email: 'test@example.com' },
+      payload: { email: 'test@example.com', token_use: 'id', aud: '7pj9230obhsa6h6vrvk9tru7do' },
       protectedHeader: { alg: 'RS256' },
       key: {} as any,
     } as any);
@@ -125,7 +125,7 @@ describe('createCognitoAuthMiddleware', () => {
 
   it('omits email when payload has no email claim', async () => {
     vi.mocked(jwtVerify).mockResolvedValue({
-      payload: { sub: 'user-uuid-456' },
+      payload: { sub: 'user-uuid-456', token_use: 'id', aud: '7pj9230obhsa6h6vrvk9tru7do' },
       protectedHeader: { alg: 'RS256' },
       key: {} as any,
     } as any);
@@ -146,7 +146,12 @@ describe('createCognitoAuthMiddleware', () => {
 
   it('extracts cognito:groups claim when present', async () => {
     vi.mocked(jwtVerify).mockResolvedValue({
-      payload: { sub: 'user-uuid', 'cognito:groups': ['admin', 'developers'] },
+      payload: {
+        sub: 'user-uuid',
+        'cognito:groups': ['admin', 'developers'],
+        token_use: 'id',
+        aud: '7pj9230obhsa6h6vrvk9tru7do',
+      },
       protectedHeader: { alg: 'RS256' },
       key: {} as any,
     } as any);
@@ -163,7 +168,12 @@ describe('createCognitoAuthMiddleware', () => {
 
   it('403 forbidden when requiredGroup not in user groups', async () => {
     vi.mocked(jwtVerify).mockResolvedValue({
-      payload: { sub: 'user-uuid', 'cognito:groups': ['developers'] },
+      payload: {
+        sub: 'user-uuid',
+        'cognito:groups': ['developers'],
+        token_use: 'id',
+        aud: 'test-client-id',
+      },
       protectedHeader: { alg: 'RS256' },
       key: {} as any,
     } as any);
@@ -189,7 +199,12 @@ describe('createCognitoAuthMiddleware', () => {
 
   it('allows when user is in requiredGroup', async () => {
     vi.mocked(jwtVerify).mockResolvedValue({
-      payload: { sub: 'user-uuid', 'cognito:groups': ['admin'] },
+      payload: {
+        sub: 'user-uuid',
+        'cognito:groups': ['admin'],
+        token_use: 'id',
+        aud: 'test-client-id',
+      },
       protectedHeader: { alg: 'RS256' },
       key: {} as any,
     } as any);
@@ -294,7 +309,7 @@ describe('createCognitoAuthMiddleware', () => {
 
   it('passes correct issuer and audience to jwtVerify', async () => {
     vi.mocked(jwtVerify).mockResolvedValue({
-      payload: { sub: 'user-1' },
+      payload: { sub: 'user-1', token_use: 'id', aud: '7pj9230obhsa6h6vrvk9tru7do' },
       protectedHeader: { alg: 'RS256' },
       key: {} as any,
     } as any);
@@ -305,13 +320,106 @@ describe('createCognitoAuthMiddleware', () => {
 
     await middleware(req, res, next);
 
+    // We verify signature + issuer with `jose` and check audience/client_id
+    // ourselves (depending on token_use), so the only option passed in is
+    // the issuer.
     expect(jwtVerify).toHaveBeenCalledWith(
       'check.options.token',
       expect.any(Function), // JWKS function
       {
         issuer: `https://cognito-idp.ap-southeast-2.amazonaws.com/${CONFIG.userPoolId}`,
-        audience: CONFIG.clientId,
       },
+    );
+  });
+
+  it('accepts an access token (no aud, has client_id + token_use=access)', async () => {
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: {
+        sub: 'user-uuid-access',
+        token_use: 'access',
+        client_id: CONFIG.clientId,
+        scope: 'aws.cognito.signin.user.admin',
+      },
+      protectedHeader: { alg: 'RS256' },
+      key: {} as any,
+    } as any);
+
+    const req = mockReq({ authorization: 'Bearer access.token' });
+    const res = mockRes();
+    const next = mockNext();
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.cognitoUser?.sub).toBe('user-uuid-access');
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('rejects an access token whose client_id does not match', async () => {
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: {
+        sub: 'user-uuid',
+        token_use: 'access',
+        client_id: 'wrong-client-id',
+      },
+      protectedHeader: { alg: 'RS256' },
+      key: {} as any,
+    } as any);
+
+    const req = mockReq({ authorization: 'Bearer access.token' });
+    const res = mockRes();
+    const next = mockNext();
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: 'invalid_token',
+        message: expect.stringContaining('client_id'),
+      }),
+    );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('rejects an ID token whose aud does not match', async () => {
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: 'user-uuid', token_use: 'id', aud: 'wrong-aud' },
+      protectedHeader: { alg: 'RS256' },
+      key: {} as any,
+    } as any);
+
+    const req = mockReq({ authorization: 'Bearer id.token' });
+    const res = mockRes();
+    const next = mockNext();
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: 'invalid_token',
+        message: expect.stringContaining('aud'),
+      }),
+    );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('rejects a token without a token_use claim', async () => {
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: 'user-uuid' },
+      protectedHeader: { alg: 'RS256' },
+      key: {} as any,
+    } as any);
+
+    const req = mockReq({ authorization: 'Bearer no-token-use.token' });
+    const res = mockRes();
+    const next = mockNext();
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: 'invalid_token',
+        message: expect.stringContaining('token_use'),
+      }),
     );
   });
 });
