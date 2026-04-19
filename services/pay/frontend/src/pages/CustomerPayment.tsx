@@ -22,9 +22,13 @@ interface Transaction {
   cardId: string;
 }
 
+// Matches the TransactionCardSummary returned by
+// services/pay/src/transactions/transaction.service.ts::getTransactionCardSummary.
+// panLast4 is denormalised onto the Transaction row (post-split); credentials
+// come back from Palisade's listWebAuthnCredentials endpoint.
 interface CardSummary {
   id: string;
-  vaultEntry: { panLast4: string } | null;
+  panLast4: string | null;
   credentials: { kind: CredentialKind }[];
 }
 
@@ -157,7 +161,7 @@ export default function CustomerPayment() {
           <div>
             <div className="small">Card</div>
             <div className="mono">
-              {card.vaultEntry ? `•••• ${card.vaultEntry.panLast4}` : '—'}
+              {card.panLast4 ? `•••• ${card.panLast4}` : '—'}
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
