@@ -28,13 +28,6 @@ import type { WSMessage } from '../ws/messages.js';
 // are at AID A000000151000000.  Use the widely-deployed default here.
 const DEFAULT_ISD_AID = Buffer.from('A000000151000000', 'hex');
 
-export interface Scp03Context {
-  /** Full plaintext response including SW (what the card sent). */
-  expectedSw?: number;
-  /** When true, a non-9000 SW still returns instead of throwing. */
-  allowError?: boolean;
-}
-
 export interface DriveResult {
   /** Full response including SW (plaintext after unwrap). */
   response: Buffer;
