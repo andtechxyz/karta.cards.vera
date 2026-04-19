@@ -25,12 +25,20 @@ import { loadActiveSession } from './session.js';
 //   1. Card has a preregistered credential (perso-time FIDO mint):
 //         → mode="assert"
 //      Server derives the card's post-activation URL, computes
-//      AES-CMAC(sdmFileReadKey, url), and bakes url+cmac onto the TAIL of
-//      the credential ID.  Browser passes that extended blob to the
-//      authenticator; the T4T applet inside the chip splits on the way in
-//      and uses setUrlWithMac() via SIO to rotate its own baseUrl +
-//      state.  A real WebAuthn assertion is performed; /finish verifies
-//      the signature and flips Card.status to ACTIVATED.
+//      AES-CMAC(sdmFileReadKey, url), and emits url+cmac to the
+//      authenticator via TWO parallel channels:
+//        (a) an extended credential ID tail — <credId>||<url>||<cmac> —
+//            consumed by the applet's CTAP1 u2FAuthenticate path on
+//            Android Chrome (CTAP1/U2F over NFC), AND by the CTAP2
+//            allowList fallback;
+//        (b) a WebAuthn extension `karta-url` carrying the same
+//            <url>||<cmac> bytes — consumed by the applet's CTAP2
+//            getAssertion extension parser, used when the browser
+//            truncates cred IDs (observed on iOS Safari).
+//      The applet uses setUrlWithMac() via SIO to rotate its own baseUrl
+//      and state to ACTIVATED.  Whichever channel delivers, the chip
+//      flips.  A real WebAuthn assertion is also performed; /finish
+//      verifies the signature and flips Card.status to ACTIVATED.
 //
 //   2. No preregistered credential:
 //         → mode="register"
@@ -111,9 +119,17 @@ export async function beginActivationRegistration(
     fileReadKey.fill(0); // scrub
 
     // Build the extended credential ID bytes: <realCredId> || <url> || <cmac>
+    // Channel (a) — present in allowCredentials[0].id, picked up by the
+    // applet's CTAP1 path AND its CTAP2 allowList tail-stripping logic.
     const realCredId = Buffer.from(preReg.credentialId, 'base64url');
     const extended = Buffer.concat([realCredId, urlBytes, cmac]);
     const extendedB64u = extended.toString('base64url');
+
+    // Channel (b) — `karta-url` WebAuthn extension carrying <url>||<cmac>
+    // (no real cred ID prefix needed; allowList delivers that already).
+    // This is the ONLY channel that survives iOS Safari's cred-ID
+    // truncation; the applet's CTAP2 extension parser consumes it.
+    const kartaUrlPayload = Buffer.concat([urlBytes, cmac]).toString('base64url');
 
     const opts = buildAuthenticationOptions({
       credentials: [
@@ -125,6 +141,14 @@ export async function beginActivationRegistration(
       ],
     });
     const options = await generateAuthenticationOptions(opts);
+
+    // Attach the karta-url extension.  @simplewebauthn types only know
+    // about the standard WebAuthn extensions, so we widen to Record to
+    // attach a custom one.  Browsers that don't recognise it should
+    // ignore it (per WebAuthn §9.4); browsers that pass it through
+    // deliver the url+cmac to the authenticator.
+    const ext = { ...(options.extensions ?? {}), 'karta-url': kartaUrlPayload };
+    options.extensions = ext as typeof options.extensions;
 
     await prisma.activationSession.update({
       where: { id: session.id },

@@ -73,10 +73,14 @@ export async function authenticate(input: {
  *      c. /finish verifies the attestation + activates
  *
  *   2. mode=assert (perso-time preregistered cred exists):
- *      a. /begin returns WebAuthn assertion options.  allowCredentials[0].id
- *         is a base64url blob of <realCredId> || <url> || <cmac(16)> —
- *         the chip's T4T applet extracts the url+cmac tail on the way in
- *         and does setUrlWithMac() via SIO.
+ *      a. /begin returns WebAuthn assertion options carrying the chip-
+ *         update payload on TWO channels (the browser picks whichever it
+ *         doesn't strip): allowCredentials[0].id is the base64url blob
+ *         <realCredId>||<url>||<cmac(16)> — the applet's CTAP1 path and
+ *         CTAP2 allowList tail-stripper consume it.  options.extensions
+ *         carries `karta-url` = <url>||<cmac> — the applet's CTAP2
+ *         extension parser consumes it.  Either channel triggers the
+ *         applet's setUrlWithMac() via SIO.
  *      b. browser runs startAuthentication() — user taps card on phone
  *      c. chip signs the challenge + self-updates (baseUrl + state)
  *      d. /finish verifies the assertion + flips Card.status to ACTIVATED

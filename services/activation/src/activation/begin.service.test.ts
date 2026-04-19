@@ -127,6 +127,35 @@ describe('beginActivationRegistration', () => {
     expect(extBytes.subarray(-16).toString('hex')).toBe('a'.repeat(32));
   });
 
+  it('assert mode: also attaches `karta-url` extension carrying url||cmac (channel B)', async () => {
+    const realCredBytes = Buffer.from('realcred', 'ascii').toString('base64url');
+    cardFind().mockResolvedValue({
+      id: 'card_1', cardRef: 'kc_1', status: 'SHIPPED',
+      sdmFileReadKeyEncrypted: 'enc', keyVersion: 1,
+      program: {
+        preActivationNdefUrlTemplate: null,
+        postActivationNdefUrlTemplate: 'https://tap.karta.cards/pay/{cardRef}?e={PICCData}&m={CMAC}',
+      },
+      credentials: [
+        { credentialId: realCredBytes, kind: 'CROSS_PLATFORM', preregistered: true, transports: ['nfc'] },
+      ],
+    });
+
+    const r = await beginActivationRegistration('sess_1');
+    if (r.mode !== 'assert') throw new Error('expected assert');
+
+    const ext = r.options.extensions as Record<string, string> | undefined;
+    expect(ext).toBeDefined();
+    expect(typeof ext!['karta-url']).toBe('string');
+
+    const payload = Buffer.from(ext!['karta-url'], 'base64url');
+    // <url(N)> || <cmac(16)>; the url portion must be the bare host+path,
+    // and the trailing 16 bytes must equal the (mocked) CMAC.
+    const url = payload.subarray(0, payload.length - 16).toString('utf8');
+    expect(url).toBe('tap.karta.cards/pay/card_1');
+    expect(payload.subarray(-16).toString('hex')).toBe('a'.repeat(32));
+  });
+
   it('assert mode: strips https:// and ?e=... from post-activation URL before CMAC', async () => {
     const realCredBytes = Buffer.from('realcred', 'ascii').toString('base64url');
     cardFind().mockResolvedValue({
