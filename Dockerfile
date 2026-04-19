@@ -115,6 +115,12 @@ COPY --from=builder /app/services/${SERVICE}/package.json   services/${SERVICE}/
 # Copy built frontend (may be empty for tap/vault — builder ensures dir exists)
 COPY --from=builder /app/services/${SERVICE}/frontend/dist/ services/${SERVICE}/frontend/dist/
 
+# Copy scripts/ so one-off tasks (seed, regen-sad-e2e, etc.) can run via
+# `ecs run-task` with a command override.  Not used by the normal service
+# process; kept in every image so any of them doubles as a one-off shell.
+COPY --from=builder /app/scripts/ scripts/
+COPY --from=builder /app/tsconfig.json /app/tsconfig.base.json ./
+
 # Bake the service name into an ENV so CMD can reference it at runtime
 # (ARG is build-time only).
 ENV SERVICE_NAME=${SERVICE}
