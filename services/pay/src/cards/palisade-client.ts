@@ -35,6 +35,13 @@ export interface CardState {
   panLast4: string | null;
   panBin: string | null;
   cardholderName: string | null;
+  /**
+   * Opaque Vera VaultEntry id — the cross-repo FK surrogate from Phase 2's
+   * `/api/vault/register` flow.  Null for admin-only dev cards that never
+   * ran vault registration.  Pay stamps it onto `Transaction.vaultEntryId`
+   * so retrieval-token minting doesn't need a Vera-local Card lookup.
+   */
+  vaultToken: string | null;
 }
 
 /**

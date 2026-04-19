@@ -77,22 +77,12 @@ export async function createTransaction(input: CreateTxnInput) {
   const challenge = crypto.randomBytes(32).toString('base64url');
   const rlid = rlidGen();
 
-  // Resolve the VaultEntry id locally (the field is owned by Vera) so
-  // post-auth can mint a retrieval token without a second lookup.  The FK
-  // `Card.vaultEntryId` still lives in Vera's local Card table today — Phase
-  // 3 Step 3 drops the Card table and will need Palisade's lookupCard to
-  // return `vaultToken` (which IS vaultEntryId on the Vera side, see
-  // services/vault/src/routes/register.routes.ts).  Until then we read
-  // Vera's local copy to stamp Transaction.vaultEntryId.
-  //
-  // Nullable: admin-only dev cards that never ran the vault-register path
-  // have no VaultEntry, and post-auth still fails that flow with
-  // `card_not_vaulted` before minting a retrieval token.
-  const localCard = await prisma.card.findUnique({
-    where: { id: card.id },
-    select: { vaultEntryId: true },
-  });
-
+  // `vaultToken` on the Palisade card-lookup response IS the Vera
+  // VaultEntry id (Phase 2 FK-cut; see services/vault/src/routes/register.routes.ts).
+  // Stamp it onto Transaction so post-auth can mint a retrieval token
+  // without a second lookup.  Nullable: admin-only dev cards that never
+  // ran the vault-register path have no VaultEntry — post-auth fails
+  // that flow with `card_not_vaulted` before minting.
   return prisma.transaction.create({
     data: {
       rlid,
@@ -111,7 +101,7 @@ export async function createTransaction(input: CreateTxnInput) {
       panLast4: card.panLast4,
       panBin: card.panBin,
       cardholderName: card.cardholderName,
-      vaultEntryId: localCard?.vaultEntryId ?? null,
+      vaultEntryId: card.vaultToken,
     },
   });
 }

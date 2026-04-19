@@ -9,13 +9,6 @@ vi.mock('@vera/db', async (importActual) => {
   return {
     ...actual,
     prisma: {
-      // Card.findUnique remains a local read for the transitional
-      // vaultEntryId stamp in createTransaction — dropped when Phase 3
-      // Step 3 moves Card out of Vera and Palisade's lookupCard starts
-      // returning vaultToken.  See transaction.service.ts comment.
-      card: {
-        findUnique: vi.fn(),
-      },
       tokenisationProgram: {
         findUnique: vi.fn(),
       },
@@ -54,7 +47,7 @@ import { incrementAtc, listWebAuthnCredentials, lookupCard } from '../cards/inde
 type Mocked<T> = ReturnType<typeof vi.fn> & T;
 
 function activatedCard(
-  overrides: Partial<{ programId: string | null; status: string; id: string }> = {},
+  overrides: Partial<{ programId: string | null; status: string; id: string; vaultToken: string | null }> = {},
 ) {
   return {
     id: overrides.id ?? 'card_1',
@@ -66,6 +59,7 @@ function activatedCard(
     panLast4: '4242',
     panBin: '411111',
     cardholderName: 'Test User',
+    vaultToken: overrides.vaultToken ?? null,
   };
 }
 
@@ -85,8 +79,6 @@ const lookupCardMock = () => lookupCard as unknown as Mocked<typeof lookupCard>;
 const incrementAtcMock = () => incrementAtc as unknown as Mocked<typeof incrementAtc>;
 const listCredsMock = () =>
   listWebAuthnCredentials as unknown as Mocked<typeof listWebAuthnCredentials>;
-const cardFindUnique = () =>
-  prisma.card.findUnique as unknown as Mocked<typeof prisma.card.findUnique>;
 const tokenisationProgramFindUnique = () =>
   prisma.tokenisationProgram.findUnique as unknown as Mocked<typeof prisma.tokenisationProgram.findUnique>;
 
@@ -104,7 +96,6 @@ beforeEach(() => {
   vi.mocked(lookupCardMock()).mockReset();
   vi.mocked(incrementAtcMock()).mockReset();
   vi.mocked(listCredsMock()).mockReset();
-  vi.mocked(cardFindUnique()).mockReset().mockResolvedValue({ vaultEntryId: null } as never);
   vi.mocked(tokenisationProgramFindUnique()).mockReset().mockResolvedValue(null);
 });
 
@@ -179,8 +170,9 @@ describe('createTransaction', () => {
   });
 
   it('creates a transaction with default rules + TIER_1 for a small AUD amount on an unlinked card', async () => {
-    vi.mocked(lookupCardMock()).mockResolvedValue(activatedCard() as never);
-    vi.mocked(cardFindUnique()).mockResolvedValue({ vaultEntryId: 've_1' } as never);
+    vi.mocked(lookupCardMock()).mockResolvedValue(
+      { ...activatedCard(), vaultToken: 've_1' } as never,
+    );
 
     await createTransaction({
       cardId: 'card_1',
@@ -218,8 +210,8 @@ describe('createTransaction', () => {
     expect(data.panLast4).toBe('4242');
     expect(data.panBin).toBe('411111');
     expect(data.cardholderName).toBe('Test User');
-    // vaultEntryId is pulled from the local Card.findUnique (transitional
-    // stamp — Phase 3 Step 3 will relocate this source).
+    // vaultEntryId is stamped from Palisade lookupCard's vaultToken
+    // response field (opaque Vera VaultEntry id).
     expect(data.vaultEntryId).toBe('ve_1');
   });
 
