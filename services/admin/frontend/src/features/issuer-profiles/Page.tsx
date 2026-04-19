@@ -26,9 +26,9 @@ export function IssuerProfilesPage() {
     setErr(null);
     try {
       const [ip, pg, cp] = await Promise.all([
-        api.get<IssuerProfile[]>('/issuer-profiles'),
-        api.get<Program[]>('/programs'),
-        api.get<ChipProfile[]>('/chip-profiles'),
+        api.palisade.get<IssuerProfile[]>('/issuer-profiles'),
+        api.palisade.get<Program[]>('/programs'),
+        api.palisade.get<ChipProfile[]>('/chip-profiles'),
       ]);
       setProfiles(ip);
       setPrograms(pg);
@@ -48,7 +48,7 @@ export function IssuerProfilesPage() {
     // List returns masked ARNs — fetch the full detail record so the
     // edit form starts from the actual value.
     try {
-      const full = await api.get<IssuerProfile>(`/issuer-profiles/${row.id}`);
+      const full = await api.palisade.get<IssuerProfile>(`/issuer-profiles/${row.id}`);
       setEditing(full);
     } catch (e) {
       setErr(errorMsg(e));

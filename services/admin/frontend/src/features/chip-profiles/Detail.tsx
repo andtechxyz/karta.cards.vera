@@ -149,9 +149,9 @@ export function ChipProfileDetail({ profile, onSaved, onCancel }: Props) {
       if (form.fidoAid) body.fidoAid = form.fidoAid;
 
       if (isNew) {
-        await api.post('/chip-profiles', body);
+        await api.palisade.post('/chip-profiles', body);
       } else {
-        await api.patch(`/chip-profiles/${(profile as ChipProfile).id}`, body);
+        await api.palisade.patch(`/chip-profiles/${(profile as ChipProfile).id}`, body);
       }
       onSaved();
     } catch (e) {
