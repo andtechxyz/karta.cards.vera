@@ -1,1 +1,1 @@
-card_ref,uid,sdm_meta_read_key,sdm_file_read_key,chip_serial,pan,cvc,expiry_month,expiry_year,cardholder_name
+card_ref,uid,chip_serial,pan,cvc,expiry_month,expiry_year,cardholder_name

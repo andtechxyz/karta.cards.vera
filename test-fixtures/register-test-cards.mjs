@@ -66,12 +66,13 @@ let ok = 0, fail = 0;
 
 for (const line of dataLines) {
   const r = rowToObject(line);
+  // SDM meta/file keys are intentionally NOT sent — tap-service derives them
+  // on every tap from the UID via the HSM (NXP AN12196 / AN14683).  Any
+  // sdm_meta_read_key / sdm_file_read_key columns in the CSV are ignored.
   const body = JSON.stringify({
     cardRef: r.card_ref,
     uid: r.uid,
     chipSerial: r.chip_serial,
-    sdmMetaReadKey: r.sdm_meta_read_key,
-    sdmFileReadKey: r.sdm_file_read_key,
     programId: PROGRAM_ID,
     card: {
       pan: r.pan,

@@ -171,20 +171,22 @@ uses for subsequent payment authentications, so the rest of the flow
 
 ## Step 7 — provisioning (mobile app session)
 
-data-prep is running with `DATA_PREP_MOCK_EMV=true` — the EMV key derivation
-step skips AWS Payment Cryptography and returns deterministic fake iCVVs +
-mock key ARNs.  That means:
+data-prep is running with `DATA_PREP_UDK_BACKEND=local` — EMV key derivation
+runs real Method A in Node crypto, keyed by per-ARN dev IMKs HKDF'd from
+`DEV_UDK_ROOT_SEED`.  No AWS Payment Cryptography calls.  That means:
 
 - ✅ The full tap → activation → microsite → provisioning chain runs end-to-end.
 - ✅ The mobile app sees a real SadRecord and can walk its provisioning state
   machine against the PA applet on the card.
-- ❌ Real EMV payment transactions against an issuer system would fail
-  (the iCVV is a hash, not a real CVV2).  That's fine for E2E; tap-to-pay
-  isn't in scope this week.
+- ✅ Derived MK-AC / MK-SMI / MK-SMC are cryptographically correct for the
+  chosen dev IMK; the applet's own secure-messaging works.
+- ❌ Real EMV payment transactions against an issuer system would fail —
+  the dev IMK isn't the one the scheme has registered.
 
 Create an IssuerProfile for `prog_test_std` so data-prep has a row to read.
 Use `test-fixtures/issuer-keys-test.json` as the field reference (the ARN
-values are ignored in mock mode — they just need to be non-empty strings).
+values are used as HKDF info strings by the `local` backend — they just
+need to be non-empty and stable across runs).
 
 Fastest way: admin UI → Programs → `prog_test_std` → "Issuer profile"
 section → fill the fields from the JSON fixture.  Link it to the chip
@@ -205,8 +207,9 @@ a scheme):
    - IMK-SMC     (`TR31_E2_EMV_MKEY_DATA_ENCIPHERMENT`)
    ~US$1/day per key.
 2. Paste the ARNs into the IssuerProfile row.
-3. Flip the secret: `aws secretsmanager put-secret-value --secret-id
-   vera/DATA_PREP_MOCK_EMV --secret-string "false" --region ap-southeast-2`
+3. Flip the backend: `aws secretsmanager put-secret-value --secret-id
+   vera/DATA_PREP_UDK_BACKEND --secret-string "hsm" --region ap-southeast-2`
+   (The legacy `vera/DATA_PREP_MOCK_EMV=false` alias also selects `hsm`.)
 4. Force redeploy data-prep.
 
 ## Troubleshooting
