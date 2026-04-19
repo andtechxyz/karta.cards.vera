@@ -38,6 +38,9 @@ vi.mock('@vera/service-auth', () => ({
   requireSignedRequest: vi.fn().mockReturnValue(
     (_req: any, _res: any, next: any) => next(),
   ),
+  // Stub: real signRequest builds an HMAC header, but the test only cares
+  // that the call goes out — it doesn't verify the signature.
+  signRequest: vi.fn().mockReturnValue('Vera-HMAC v1 keyId=activation,signature=test'),
 }));
 
 vi.mock('undici', () => ({
@@ -244,13 +247,13 @@ describe('POST /api/provisioning/start', () => {
       cognitoSub: null,
     } as never);
 
-    // Mock RCA response
+    // Mock RCA response — RCA returns camelCase per its real contract.
     vi.mocked(undiciRequest).mockResolvedValue({
       statusCode: 200,
       body: {
         json: vi.fn().mockResolvedValue({
-          session_id: 'rca_session_1',
-          ws_url: 'wss://rca.example.com/ws',
+          sessionId: 'rca_session_1',
+          wsUrl: 'wss://rca.example.com/ws',
         }),
       },
     } as any);

@@ -4,7 +4,7 @@ import { prisma } from '@vera/db';
 import { badRequest, notFound } from '@vera/core';
 import { verifyHandoff } from '@vera/handoff';
 import { createCognitoAuthMiddleware } from '@vera/cognito-auth';
-import { requireSignedRequest } from '@vera/service-auth';
+import { requireSignedRequest, signRequest } from '@vera/service-auth';
 import { request } from 'undici';
 import { getActivationConfig } from '../env.js';
 
@@ -50,23 +50,38 @@ export function createProvisioningRouter(): Router {
       sessionId = `mock-${mockId}`;
       wsUrl = `ws://localhost:4000/mock-rca/${mockId}`;
     } else {
-      // Call Palisade RCA to start provisioning
-      const rcaResp = await request(`${config.PALISADE_RCA_URL}/api/v1/provision/start`, {
+      // Call RCA's /api/provision/start.  HMAC-signed with the same
+      // SERVICE_AUTH_PROVISIONING_SECRET we use for data-prep — RCA's
+      // PROVISION_AUTH_KEYS["activation"] must be the same hex value.
+      const path = '/api/provision/start';
+      const bodyBytes = Buffer.from(
+        JSON.stringify({ proxyCardId: card.proxyCardId }),
+        'utf8',
+      );
+      const authorization = signRequest({
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          proxy_card_id: card.proxyCardId,
-          activation_token: handoffToken,
-        }),
+        pathAndQuery: path,
+        body: bodyBytes,
+        keyId: 'activation',
+        secret: config.SERVICE_AUTH_PROVISIONING_SECRET,
+      });
+
+      const rcaResp = await request(`${config.PALISADE_RCA_URL}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization },
+        body: bodyBytes,
       });
 
       if (rcaResp.statusCode >= 400) {
+        // Surface the RCA's body to logs so we can debug auth/contract drift.
+        const errText = await rcaResp.body.text();
+        console.error(`[activation] RCA /provision/start ${rcaResp.statusCode}: ${errText}`);
         throw badRequest('rca_error', 'Failed to start provisioning session');
       }
 
-      const rcaBody = (await rcaResp.body.json()) as { session_id: string; ws_url: string };
-      sessionId = rcaBody.session_id;
-      wsUrl = rcaBody.ws_url;
+      const rcaBody = (await rcaResp.body.json()) as { sessionId: string; wsUrl: string };
+      sessionId = rcaBody.sessionId;
+      wsUrl = rcaBody.wsUrl;
     }
 
     // Create local provisioning session
