@@ -10,16 +10,8 @@
     { "path": "./packages/programs" },
     { "path": "./packages/service-auth" },
     { "path": "./packages/retention" },
-    { "path": "./packages/emv" },
-    { "path": "./packages/provisioning-client" },
-    { "path": "./services/tap" },
-    { "path": "./services/activation" },
     { "path": "./services/pay" },
     { "path": "./services/vault" },
-    { "path": "./services/admin" },
-    { "path": "./services/data-prep" },
-    { "path": "./services/rca" },
-    { "path": "./services/batch-processor" },
-    { "path": "./services/sftp" }
+    { "path": "./services/admin" }
   ]
 }

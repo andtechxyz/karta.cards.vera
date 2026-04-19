@@ -94,7 +94,8 @@ router.post('/:cardRef/mark-sold', async (req, res) => {
 // generate a credential on the chip via CTAP-NFC.  The applet returns the
 // credentialId + COSE public key + transports.  The perso tool then POSTs
 // that material here so the activation flow can short-circuit the runtime
-// WebAuthn ceremony — see services/activation/src/activation/begin.service.ts.
+// WebAuthn ceremony.  The activation service lives in the Palisade repo
+// (services/activation/src/activation/begin.service.ts over there).
 //
 // Trust model:
 //   - This endpoint is mounted under adminAuth (Cognito group=admin OR the
