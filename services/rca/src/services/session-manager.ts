@@ -141,17 +141,40 @@ export class SessionManager {
    * Route card responses based on the current phase.
    */
   private async handleCardResponse(sessionId: string, msg: WSMessage): Promise<WSMessage[]> {
-    const [, sw] = APDUBuilder.parseResponse(
-      (msg.hex ?? '') + (msg.sw ?? ''),
-    );
+    // The mobile app sends `{type:"response", hex:"<data hex>", sw:"<4 hex>"}`.
+    // If it can't reach the chip — NFC field drop, ISO-DEP timeout,
+    // transceive exception — it tends to send either no fields at all or
+    // empty strings, which parseResponse collapses to a synthetic 6F00.
+    // We want to tell those apart in logs so we can diagnose mobile-side
+    // vs chip-side errors without guessing.
+    const rawHex = msg.hex ?? '';
+    const rawSw = msg.sw ?? '';
+    const concat = rawHex + rawSw;
+    const appErrored = concat.length < 4; // chip SW is always 2 bytes / 4 hex chars
+
+    const [, sw] = APDUBuilder.parseResponse(concat);
 
     // Check for card error
     if (sw !== 0x9000) {
-      console.warn(`[rca] card error SW=${sw.toString(16).padStart(4, '0')} in session ${sessionId}`);
+      const swStr = sw.toString(16).padStart(4, '0').toUpperCase();
+      if (appErrored) {
+        console.warn(
+          `[rca] mobile-side NFC failure (empty response) in session ${sessionId}: ` +
+          `msg={type:"${msg.type}", hex.len=${rawHex.length}, sw="${rawSw}", phase:"${msg.phase ?? ''}"}.`
+          + ` RCA is synthesizing SW=6F00 but the chip never responded.`,
+        );
+      } else {
+        console.warn(
+          `[rca] chip card error SW=${swStr} in session ${sessionId} ` +
+          `(response was hex.len=${rawHex.length}, sw="${rawSw}")`,
+        );
+      }
       return [{
         type: 'error',
-        code: 'CARD_ERROR',
-        message: `Card returned error SW=${sw.toString(16).padStart(4, '0').toUpperCase()}`,
+        code: appErrored ? 'NFC_ERROR' : 'CARD_ERROR',
+        message: appErrored
+          ? `Mobile NFC transceive failed — no chip response received`
+          : `Card returned error SW=${swStr}`,
       }];
     }
 
