@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, errorMsg, getAuthToken } from '../../utils/api';
+import { api as allApi, errorMsg, getAuthToken } from '../../utils/api';
+const api = allApi.palisade;
 import { formatBytes, formatDate } from '../../utils/format';
 import { Table, type Column } from '../../components/Table';
 import { StatusChip } from '../../components/StatusChip';

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, errorMsg } from '../../utils/api';
+import { api as allApi, errorMsg } from '../../utils/api';
+const api = allApi.palisade;
 import { RuleEditor } from './RuleEditor';
 import type { Program, ProgramType, TierRule } from './types';
 import { PROGRAM_TYPE_OPTIONS, NEW_PROGRAM_DEFAULT_RULES, cloneRules } from './types';

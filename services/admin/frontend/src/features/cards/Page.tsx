@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '../../utils/api';
+import { api as allApi } from '../../utils/api';
+const api = allApi.palisade;
 import { formatDate } from '../../utils/format';
 import { Table, type Column } from '../../components/Table';
 import { StatusChip, statusToneFor } from '../../components/StatusChip';

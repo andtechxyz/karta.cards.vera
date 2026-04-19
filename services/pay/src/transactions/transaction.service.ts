@@ -5,7 +5,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '@vera/db';
 import { badRequest, gone, notFound } from '@vera/core';
 import { TRANSACTION_TTL_ELAPSED_REASON } from '@vera/retention';
-import { normaliseCurrency, resolveRulesFromProgram } from '@vera/programs';
+import { normaliseCurrency, resolveRulesFromTokenisationProgram } from '@vera/programs';
 import { evaluateTierRules } from './tier.js';
 import { assertTransition } from './state-machine.js';
 import { getPayConfig } from '../env.js';
@@ -26,15 +26,21 @@ export async function createTransaction(input: CreateTxnInput) {
   }
   const card = await prisma.card.findUnique({
     where: { id: input.cardId },
-    include: { program: true },
+    select: { id: true, status: true, programId: true },
   });
   if (!card) throw notFound('card_not_found', 'Card not found');
   if (card.status !== CardStatus.ACTIVATED) {
     throw badRequest('card_not_activated', `Card status is ${card.status}`);
   }
 
+  // Tier rules live on Vera's TokenisationProgram (Phase 4c).  Palisade
+  // admin still edits the card-side Program (NDEF templates, FI, embossing),
+  // but tierRules + currency for tx enforcement are resolved here.
+  const tokenisationProgram = card.programId
+    ? await prisma.tokenisationProgram.findUnique({ where: { id: card.programId } })
+    : null;
   const { rules, currency: programCurrency, programId } =
-    resolveRulesFromProgram(card.program);
+    resolveRulesFromTokenisationProgram(tokenisationProgram);
   const currency = normaliseCurrency(input.currency);
   if (programCurrency && programCurrency !== currency) {
     throw badRequest(

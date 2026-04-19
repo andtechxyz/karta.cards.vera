@@ -7,7 +7,7 @@ export {
   tierRuleSetSchema,
 } from './tier-rules.js';
 export type { TierRule, TierRuleSet } from './tier-rules.js';
-export { resolveRulesFromProgram } from './program.js';
+export { resolveRulesFromTokenisationProgram } from './program.js';
 export type { ResolvedProgramRules } from './program.js';
 export {
   PROGRAM_TYPES,

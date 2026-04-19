@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, getAuthToken } from '../../utils/api';
+import { api as allApi, getAuthToken } from '../../utils/api';
+const api = allApi.palisade;
 import type { Program } from '../programs/types';
 
 interface BatchResult {

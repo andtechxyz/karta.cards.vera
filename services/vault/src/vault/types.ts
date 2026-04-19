@@ -22,6 +22,10 @@ export interface StoreInput {
   ip?: string;
   ua?: string;
   onDuplicate?: 'error' | 'reuse';
+  // Cross-service register path (Palisade → Vera).  When supplied, the same
+  // key on a retry returns the same vault entry regardless of fingerprint
+  // state — takes precedence over onDuplicate.
+  idempotencyKey?: string;
 }
 
 export interface StoreResult {

@@ -2,7 +2,7 @@
   "name": "vera",
   "version": "0.0.1",
   "private": true,
-  "description": "Palisade Payment Prototype — microservices monorepo (tap, activation, pay, vault, admin)",
+  "description": "Vera — payment service: vault (PAN tokenisation) + OBO ARQC + provider orchestration. Exposes an HTTP vault-register endpoint that Palisade calls at card-issue time.",
   "type": "module",
   "workspaces": [
     "packages/*",
@@ -10,7 +10,7 @@
     "services/*/frontend"
   ],
   "scripts": {
-    "dev": "concurrently -n tap,activation,pay,vault,admin,activation-ui,pay-ui,admin-ui -c magenta,cyan,blue,yellow,green,cyan.dim,blue.dim,green.dim \"npm run dev -w services/tap\" \"npm run dev -w services/activation\" \"npm run dev -w services/pay\" \"npm run dev -w services/vault\" \"npm run dev -w services/admin\" \"npm run dev -w @vera/activation-frontend\" \"npm run dev -w @vera/pay-frontend\" \"npm run dev -w @vera/admin-frontend\"",
+    "dev": "concurrently -n pay,vault,admin,pay-ui,admin-ui -c blue,yellow,green,blue.dim,green.dim \"npm run dev -w services/pay\" \"npm run dev -w services/vault\" \"npm run dev -w services/admin\" \"npm run dev -w @vera/pay-frontend\" \"npm run dev -w @vera/admin-frontend\"",
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "typecheck": "tsc -b --verbose",

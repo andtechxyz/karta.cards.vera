@@ -13,6 +13,9 @@ vi.mock('@vera/db', async (importActual) => {
         findUnique: vi.fn(),
         update: vi.fn(),
       },
+      tokenisationProgram: {
+        findUnique: vi.fn(),
+      },
       transaction: {
         create: vi.fn(),
         findUnique: vi.fn(),
@@ -35,11 +38,11 @@ import {
 } from './transaction.service.js';
 type Mocked<T> = ReturnType<typeof vi.fn> & T;
 
-function activatedCard(overrides: Partial<{ program: unknown; status: CardStatus; id: string }> = {}) {
+function activatedCard(overrides: Partial<{ programId: string | null; status: CardStatus; id: string }> = {}) {
   return {
     id: overrides.id ?? 'card_1',
     status: overrides.status ?? CardStatus.ACTIVATED,
-    program: overrides.program ?? null,
+    programId: overrides.programId ?? null,
   };
 }
 
@@ -57,6 +60,8 @@ const cardFindUnique = () =>
   prisma.card.findUnique as unknown as Mocked<typeof prisma.card.findUnique>;
 const cardUpdate = () =>
   prisma.card.update as unknown as Mocked<typeof prisma.card.update>;
+const tokenisationProgramFindUnique = () =>
+  prisma.tokenisationProgram.findUnique as unknown as Mocked<typeof prisma.tokenisationProgram.findUnique>;
 
 beforeEach(() => {
   vi.mocked(txnFindUnique()).mockReset();
@@ -70,6 +75,7 @@ beforeEach(() => {
   vi.mocked(txnUpdateMany()).mockReset().mockResolvedValue({ count: 1 } as never);
   vi.mocked(cardFindUnique()).mockReset();
   vi.mocked(cardUpdate()).mockReset();
+  vi.mocked(tokenisationProgramFindUnique()).mockReset().mockResolvedValue(null);
 });
 
 // --- createTransaction -------------------------------------------------------
@@ -117,16 +123,15 @@ describe('createTransaction', () => {
 
   it('rejects currency mismatch when the card program pins a different currency', async () => {
     vi.mocked(cardFindUnique()).mockResolvedValue(
-      activatedCard({
-        program: {
-          id: 'prog_usd',
-          currency: 'USD',
-          tierRules: [
-            { amountMinMinor: 0, amountMaxMinor: null, allowedKinds: [CredentialKind.PLATFORM] },
-          ],
-        },
-      }) as never,
+      activatedCard({ programId: 'prog_usd' }) as never,
     );
+    vi.mocked(tokenisationProgramFindUnique()).mockResolvedValue({
+      id: 'prog_usd',
+      currency: 'USD',
+      tierRules: [
+        { amountMinMinor: 0, amountMaxMinor: null, allowedKinds: [CredentialKind.PLATFORM] },
+      ],
+    } as never);
 
     await expect(
       createTransaction({
@@ -182,17 +187,16 @@ describe('createTransaction', () => {
 
   it('respects a program-specific rule set when the card is linked', async () => {
     vi.mocked(cardFindUnique()).mockResolvedValue(
-      activatedCard({
-        program: {
-          id: 'prog_x',
-          currency: 'AUD',
-          tierRules: [
-            // Everything in this program requires both kinds (TIER_3).
-            { amountMinMinor: 0, amountMaxMinor: null, allowedKinds: [CredentialKind.PLATFORM, CredentialKind.CROSS_PLATFORM] },
-          ],
-        },
-      }) as never,
+      activatedCard({ programId: 'prog_x' }) as never,
     );
+    vi.mocked(tokenisationProgramFindUnique()).mockResolvedValue({
+      id: 'prog_x',
+      currency: 'AUD',
+      tierRules: [
+        // Everything in this program requires both kinds (TIER_3).
+        { amountMinMinor: 0, amountMaxMinor: null, allowedKinds: [CredentialKind.PLATFORM, CredentialKind.CROSS_PLATFORM] },
+      ],
+    } as never);
 
     await createTransaction({
       cardId: 'card_1',
