@@ -38,7 +38,14 @@ export interface HandleSunTapResult {
   /** Signed handoff token — 30 second TTL. */
   handoffToken: string;
   /** Current card status — lets the route handler pick the right redirect. */
-  cardStatus: 'BLANK' | 'PERSONALISED' | 'ACTIVATED' | 'PROVISIONED' | 'SUSPENDED' | 'REVOKED';
+  cardStatus:
+    | 'BLANK'
+    | 'SHIPPED'
+    | 'PERSONALISED'
+    | 'ACTIVATED'
+    | 'PROVISIONED'
+    | 'SUSPENDED'
+    | 'REVOKED';
 }
 
 export async function handleSunTap(input: HandleSunTapInput): Promise<HandleSunTapResult> {

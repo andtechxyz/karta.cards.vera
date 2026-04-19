@@ -16,11 +16,12 @@
 //     PICC, not as a separate `c=`); the backend decrypts + MAC-verifies,
 //     advances `lastReadCounter` atomically (replay defence), and mints an
 //     `ActivationSession` whose opaque token drives the identity-blind page.
-//   - **Card lifecycle: BLANK → PERSONALISED → ACTIVATED → PROVISIONED → SUSPENDED/REVOKED.**
-//     Palisade data-prep produces a card package; the provisioning-agent calls
-//     `POST /api/cards/register` which lands the Card in PERSONALISED with a
-//     linked VaultEntry.  First successful SUN-tap + WebAuthn registration
-//     flips it to ACTIVATED.
+//   - **Card lifecycle: BLANK → SHIPPED → ACTIVATED → PERSONALISED → PROVISIONED → SUSPENDED/REVOKED.**
+//     The provisioning-agent calls `POST /api/cards/register` which lands the
+//     Card in SHIPPED with a linked VaultEntry.  First successful SUN-tap +
+//     WebAuthn registration flips it to ACTIVATED.  The mobile provisioning
+//     agent then writes EMV data to the chip via APDUs (PERSONALISED) and
+//     data-prep finalises the SAD (PROVISIONED).
 //   - VaultEntry is fingerprinted (HMAC-SHA256) for dedup without decrypt.
 //   - VaultEncryptionKey + keyVersion on VaultEntry / Card supports rotation
 //     for both PAN ciphertext and SDM-key ciphertext.

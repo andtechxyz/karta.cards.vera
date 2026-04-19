@@ -52,8 +52,8 @@ router.get('/tap/:cardRef', async (req, res) => {
       return;
     }
 
-    // BLANK / PERSONALISED / SUSPENDED / REVOKED — /tap is not the correct
-    // entry point for these states.  Send the user to an error page.
+    // BLANK / SHIPPED / PERSONALISED / SUSPENDED / REVOKED — /tap is not the
+    // correct entry point for these states.  Send the user to an error page.
     res.redirect(
       302,
       `${config.MOBILE_APP_URL}/error?code=${encodeURIComponent(`invalid_status_${cardStatus.toLowerCase()}`)}`,
