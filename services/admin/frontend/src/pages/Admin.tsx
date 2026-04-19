@@ -11,6 +11,7 @@ import { BatchesPage } from '../features/batches/Page';
 import { EmbossingTemplatesPage } from '../features/embossing-templates/Page';
 import { EmbossingBatchesPage } from '../features/embossing-batches/Page';
 import { ChipProfilesPage } from '../features/chip-profiles/Page';
+import { IssuerProfilesPage } from '../features/issuer-profiles/Page';
 import { KeyMgmtPage } from '../features/key-mgmt/Page';
 import { ProvMonitorPage } from '../features/prov-monitor/Page';
 import { MicrositesPage } from '../features/microsites/Page';
@@ -50,6 +51,7 @@ const TABS: PrimaryTab[] = [
     id: 'provisioning',
     label: 'Provisioning',
     children: [
+      { id: 'issuerProfiles', label: 'Issuer Profiles' },
       { id: 'chipProfiles', label: 'Chip Profiles' },
       { id: 'keyMgmt', label: 'Key Management' },
       { id: 'provMonitor', label: 'Provisioning Monitor' },
@@ -79,6 +81,7 @@ const SECONDARY_COMPONENTS: Record<string, () => JSX.Element> = {
   embossingTemplates: EmbossingTemplatesPage,
   embossingBatches: EmbossingBatchesPage,
   chipProfiles: ChipProfilesPage,
+  issuerProfiles: IssuerProfilesPage,
   keyMgmt: KeyMgmtPage,
   provMonitor: ProvMonitorPage,
   microsites: MicrositesPage,
