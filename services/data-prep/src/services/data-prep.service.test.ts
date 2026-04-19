@@ -37,13 +37,20 @@ vi.mock('@aws-sdk/client-payment-cryptography', () => ({
   ImportKeyCommand: vi.fn(),
 }));
 
-vi.mock('@vera/emv', () => ({
-  SADBuilder: {
-    buildSad: vi.fn().mockReturnValue([]),
-    serialiseDgis: vi.fn().mockReturnValue(Buffer.from('DEADBEEF', 'hex')),
-  },
-  ChipProfile: { fromJson: vi.fn().mockReturnValue({}) },
-}));
+// Partial-mock @vera/emv: override SADBuilder + ChipProfile but preserve
+// the real encryptSadDev / decryptSadDev / key-version constants so the
+// encrypt/decrypt test cases exercise the actual crypto path.
+vi.mock('@vera/emv', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    SADBuilder: {
+      buildSad: vi.fn().mockReturnValue([]),
+      serialiseDgis: vi.fn().mockReturnValue(Buffer.from('DEADBEEF', 'hex')),
+    },
+    ChipProfile: { fromJson: vi.fn().mockReturnValue({}) },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
@@ -164,15 +171,21 @@ describe('DataPrepService', () => {
   });
 
   describe('encryptSad — dev mode (no KMS ARN)', () => {
-    it('returns base64 encoded buffer with keyVersion=1', async () => {
-      // Access private method via bracket notation
+    it('returns AES-128-ECB ciphertext with keyVersion=1', async () => {
       const plaintext = Buffer.from('hello SAD');
       const result = await (service as any).encryptSad(plaintext, '');
 
+      // keyVersion=1 means AES-128-ECB under DEV_SAD_MASTER_KEY.
       expect(result.keyVersion).toBe(1);
-      // Dev mode: utf8 buffer of the base64 string
-      const decoded = Buffer.from(result.encrypted.toString('utf8'), 'base64');
-      expect(decoded.toString()).toBe('hello SAD');
+      // ECB + PKCS#7 always rounds to a non-zero multiple of 16.
+      expect(result.encrypted.length % 16).toBe(0);
+      expect(result.encrypted.length).toBeGreaterThan(0);
+      // Round-trip via the matching decrypt path proves the ciphertext
+      // really is AES output (not the old base64 buffer).
+      const roundTripped = await (
+        await import('./data-prep.service.js')
+      ).DataPrepService.decryptSad(result.encrypted, '', 1);
+      expect(roundTripped.toString()).toBe('hello SAD');
     });
   });
 
@@ -193,12 +206,18 @@ describe('DataPrepService', () => {
   });
 
   describe('decryptSad — dev mode', () => {
-    it('base64 decodes correctly', async () => {
+    it('AES-128-ECB decrypts what encryptSad produced in dev mode', async () => {
       const original = Buffer.from('my SAD payload');
-      const encoded = Buffer.from(original.toString('base64'), 'utf8');
+      const { encrypted } = await (service as any).encryptSad(original, '');
 
-      const result = await DataPrepService.decryptSad(encoded, '', 1);
+      const result = await DataPrepService.decryptSad(encrypted, '', 1);
       expect(result.toString()).toBe('my SAD payload');
+    });
+
+    it('throws on unsupported sadKeyVersion', async () => {
+      await expect(
+        DataPrepService.decryptSad(Buffer.from('xyz'), '', 99),
+      ).rejects.toThrow(/unsupported sadKeyVersion/);
     });
   });
 

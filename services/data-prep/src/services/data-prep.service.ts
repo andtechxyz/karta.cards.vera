@@ -16,7 +16,13 @@
 import { randomBytes } from 'node:crypto';
 import { KMSClient, EncryptCommand, DecryptCommand } from '@aws-sdk/client-kms';
 import { prisma } from '@vera/db';
-import { SADBuilder, ChipProfile } from '@vera/emv';
+import {
+  SADBuilder,
+  ChipProfile,
+  encryptSadDev,
+  decryptSadDev,
+  SAD_KEY_VERSION_DEV_AES_ECB,
+} from '@vera/emv';
 import type { CardData, IssuerProfileForSad } from '@vera/emv';
 import { notFound } from '@vera/core';
 
@@ -227,7 +233,10 @@ export class DataPrepService {
    * - Production (KMS_SAD_KEY_ARN set): AWS KMS envelope encryption.
    *   The returned CiphertextBlob is self-describing (contains key metadata).
    *   sadKeyVersion = 0 — KMS manages its own key rotation.
-   * - Dev mode (KMS_SAD_KEY_ARN empty): plain base64 (no encryption).
+   * - Dev mode (KMS_SAD_KEY_ARN empty): AES-128-ECB under the static dev
+   *   SAD master key.  Stored as raw ciphertext bytes — the Bytes column
+   *   holds ECB output directly, no base64 wrapping at rest.  Matching
+   *   decrypt lives in services/data-prep/src/services/sad-crypto.ts.
    *   sadKeyVersion = 1 to distinguish from KMS-encrypted blobs.
    */
   private async encryptSad(
@@ -248,10 +257,11 @@ export class DataPrepService {
       };
     }
 
-    // Dev mode: base64 encode without encryption
+    // Dev mode: AES-128-ECB under the static dev master key.  Raw
+    // ciphertext bytes go into SadRecord.sadEncrypted.
     return {
-      encrypted: Buffer.from(sadBytes.toString('base64'), 'utf8'),
-      keyVersion: 1,
+      encrypted: encryptSadDev(sadBytes),
+      keyVersion: SAD_KEY_VERSION_DEV_AES_ECB,
     };
   }
 
@@ -260,9 +270,10 @@ export class DataPrepService {
    *
    * Can be called from other services (e.g. RCA) via the static overload.
    *
-   * @param encrypted - The encrypted (or base64-encoded) SAD buffer.
-   * @param kmsKeyArn - KMS key ARN. Empty string = dev mode (base64 decode).
-   * @param sadKeyVersion - 0 = KMS encrypted, 1 = dev mode base64.
+   * @param encrypted - The encrypted SAD buffer (raw bytes read from
+   *                    SadRecord.sadEncrypted).
+   * @param kmsKeyArn - KMS key ARN. Empty string = dev mode (AES-128-ECB).
+   * @param sadKeyVersion - 0 = KMS encrypted, 1 = dev AES-128-ECB.
    */
   static async decryptSad(
     encrypted: Buffer,
@@ -282,8 +293,14 @@ export class DataPrepService {
       return Buffer.from(resp.Plaintext);
     }
 
-    // Dev mode: base64 decode
-    return Buffer.from(encrypted.toString('utf8'), 'base64');
+    if (sadKeyVersion === SAD_KEY_VERSION_DEV_AES_ECB) {
+      // Dev mode: AES-128-ECB
+      return decryptSadDev(encrypted);
+    }
+
+    throw new Error(
+      `decryptSad: unsupported sadKeyVersion=${sadKeyVersion} (kmsKeyArn=${kmsKeyArn ? 'set' : 'empty'})`,
+    );
   }
 
   private computeEffectiveDate(expiryYymm: string): string {

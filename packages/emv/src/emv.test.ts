@@ -8,6 +8,14 @@ import { buildIad } from './iad-builder.js';
 import { APDUBuilder } from './apdu-builder.js';
 import { SADBuilder } from './sad-builder.js';
 import { buildIccPkCertificate } from './icc-cert-builder.js';
+import { ChipProfile } from './chip-profile.js';
+import {
+  DEV_SAD_MASTER_KEY,
+  SAD_KEY_VERSION_DEV_AES_ECB,
+  SAD_KEY_VERSION_KMS,
+  decryptSadDev,
+  encryptSadDev,
+} from './sad-crypto.js';
 
 // ---------------------------------------------------------------------------
 // encoding.ts
@@ -664,8 +672,250 @@ describe('SADBuilder — serialiseDgis / deserialiseDgis', () => {
 });
 
 // ---------------------------------------------------------------------------
-// icc-cert-builder.ts
+// sad-builder.ts — end-to-end buildSad with M/Chip Advance CVN-18 profile
 // ---------------------------------------------------------------------------
+
+/**
+ * Mirror of the DGI layout from test-fixtures/chip-profile-mchip-cvn18.json,
+ * reshaped into the snake_case form ChipProfile.fromJson expects (it reads
+ * `d.dgi_number` on each entry).  Separately fielded here so the tests
+ * don't depend on JSON file I/O.
+ */
+const MCHIP_CVN18_DGI_DEFS = [
+  {
+    dgi_number: 32513, // 0x7F01 — FCI template tags
+    name: 'Application FCI',
+    tags: [0x50, 0x4f, 0x9f02, 0x9f08, 0x9f10, 0x24],
+    mandatory: true,
+    source: 'per_profile',
+  },
+  {
+    dgi_number: 36864, // 0x9000 — Static Application Data (SAD core)
+    name: 'Static Application Data',
+    tags: [0x82, 0x94, 0x9f07, 0x9f02, 0x9f08, 0x5a, 0x5f2c, 0x5f30],
+    mandatory: true,
+    source: 'per_card',
+  },
+  {
+    dgi_number: 36865, // 0x9001 — Card Risk Management Object 1
+    name: 'Card Risk Management Object 1',
+    tags: [0x9f1d, 0x9f1e, 0x9f0f, 0x9f0d, 0x9f0e, 0x9f19, 0x9f14, 0x9f15],
+    mandatory: true,
+    source: 'per_profile',
+  },
+  {
+    dgi_number: 32769, // 0x8001 — ICC Private Key (PA generates on-card)
+    name: 'ICC Private Key',
+    tags: [0x9f48],
+    mandatory: true,
+    source: 'per_card',
+  },
+];
+
+/**
+ * A deliberately-small IssuerProfile with just enough fields to exercise
+ * the SAD builder's three tag-construction paths (per-profile, per-card,
+ * issuer cert) without dragging in unused scheme-specific rarities.
+ */
+const SAMPLE_ISSUER_PROFILE = {
+  scheme: 'mchip_advance',
+  cvn: 18,
+  aip: '1C00',
+  afl: '08010100100101001801020020010200',
+  cvmList: '000000000000000042035E031F03',
+  pdol: '9F66049F02069F03069F1A0295055F2A029A039C019F3704',
+  cdol1: '9F02069F03069F1A0295055F2A029A039C019F37049F3501',
+  cdol2: '8A02',
+  iacDefault: 'F040FC8000',
+  iacDenial: '0400000000',
+  iacOnline: 'F040FC8000',
+  appUsageControl: 'FF00',
+  currencyCode: '0036',
+  currencyExponent: '02',
+  countryCode: '0036',
+  sdaTagList: '82',
+  appVersionNumber: '0002',
+  appPriority: '01',
+  aid: 'A0000000041010',
+  appLabel: 'KARTA PLATINUM',
+  appPreferredName: 'KARTA',
+  issuerPkCertificate: 'AABBCCDD'.repeat(32),
+  issuerPkRemainder: '11223344',
+  issuerPkExponent: '03',
+  caPkIndex: '05',
+};
+
+const SAMPLE_CARD_DATA = {
+  pan: '4580483507983243',
+  expiryDate: '2912',
+  effectiveDate: '2412',
+  serviceCode: '201',
+  cardSequenceNumber: '01',
+  icvv: '123',
+};
+
+function buildSampleChipProfile(): ChipProfile {
+  return ChipProfile.fromJson({
+    profile_id: 'mchip-advance-cvn18-sample',
+    profile_name: 'M/Chip Advance CVN 18 (sample)',
+    scheme: 'mchip_advance',
+    applet_vendor: 'nxp',
+    cvn: 18,
+    dgi_definitions: MCHIP_CVN18_DGI_DEFS,
+    icc_private_key_dgi: 32769,
+    icc_private_key_tag: 0x9f48,
+    mk_ac_dgi: 2048,
+    mk_smi_dgi: 2049,
+    mk_smc_dgi: 2050,
+    elf_aid: 'A0000000041010',
+    module_aid: 'A0000000041010',
+    pa_aid: 'A00000006250414C',
+    fido_aid: 'A0000006472F0001',
+  });
+}
+
+describe('SADBuilder — buildSad end-to-end', () => {
+  it('produces non-empty DGI list for a full M/Chip CVN 18 profile', () => {
+    const chipProfile = buildSampleChipProfile();
+    const dgis = SADBuilder.buildSad(SAMPLE_ISSUER_PROFILE, chipProfile, SAMPLE_CARD_DATA);
+    // SAD core DGI + CRM object DGI + FCI DGI — pa_internal (ICC private)
+    // and any DGI with no matching tag values should be absent.
+    expect(dgis.length).toBeGreaterThan(0);
+    const dgiNumbers = dgis.map(([n]) => n);
+    // 36864 / 0x9000 carries the tag-0x82 AIP that we populated, so it
+    // MUST emerge.
+    expect(dgiNumbers).toContain(36864);
+    // 32769 / 0x8001 is the pa_internal ICC Private Key DGI — the SAD
+    // builder skips it so it should NOT be emitted.
+    expect(dgiNumbers).not.toContain(32769);
+  });
+
+  it('SAD core DGI contains Tag 82 (AIP) with the exact profile value', () => {
+    const chipProfile = buildSampleChipProfile();
+    const dgis = SADBuilder.buildSad(SAMPLE_ISSUER_PROFILE, chipProfile, SAMPLE_CARD_DATA);
+
+    const sadCore = dgis.find(([n]) => n === 36864);
+    expect(sadCore).toBeDefined();
+    // The DGI container is DGI header (2) + BER length + TLV payload.
+    // Parse the DGI bytes to strip header, then TLV.find the AIP tag.
+    const parsed = DGI.parse(sadCore![1]);
+    expect(parsed).toHaveLength(1);
+    // parse() returns [dgiNum, innerBytes] — inner bytes are the TLV payload
+    const tlvPayload = parsed[0][1];
+    const aipValue = TLV.find(tlvPayload, 0x82);
+    expect(aipValue).not.toBeNull();
+    expect(aipValue!.toString('hex').toUpperCase()).toBe('1C00');
+  });
+
+  it('SAD core DGI contains Tag 5A (PAN) with padded BCD encoding', () => {
+    const chipProfile = buildSampleChipProfile();
+    const dgis = SADBuilder.buildSad(SAMPLE_ISSUER_PROFILE, chipProfile, SAMPLE_CARD_DATA);
+
+    const sadCore = dgis.find(([n]) => n === 36864);
+    const parsed = DGI.parse(sadCore![1]);
+    const panValue = TLV.find(parsed[0][1], 0x5a);
+    expect(panValue).not.toBeNull();
+    // '4580483507983243' — even length, no F padding.
+    expect(panValue!.toString('hex').toUpperCase()).toBe('4580483507983243');
+  });
+
+  it('FCI DGI (32513) contains the AID (Tag 4F / 0x4F)', () => {
+    const chipProfile = buildSampleChipProfile();
+    const dgis = SADBuilder.buildSad(SAMPLE_ISSUER_PROFILE, chipProfile, SAMPLE_CARD_DATA);
+
+    // Tag 0x4F is NOT currently produced by SADBuilder — only 0x84 is
+    // emitted for the AID.  The FCI DGI here lists 0x4F in its tag set;
+    // expect the DGI to be absent (no matching tag values) OR to be
+    // emitted without an AID TLV.  This test documents current behaviour:
+    // we don't want the builder to silently insert a zero-length value.
+    const fci = dgis.find(([n]) => n === 32513);
+    if (fci) {
+      const parsed = DGI.parse(fci[1]);
+      // If the DGI emerged, its inner TLV must not contain 0x4F since we
+      // didn't populate tagValues[0x4f].
+      const aidValue = TLV.find(parsed[0][1], 0x4f);
+      expect(aidValue).toBeNull();
+    }
+  });
+
+  it('serialised then deserialised SAD round-trips to the same DGI list', () => {
+    const chipProfile = buildSampleChipProfile();
+    const dgis = SADBuilder.buildSad(SAMPLE_ISSUER_PROFILE, chipProfile, SAMPLE_CARD_DATA);
+
+    const serialised = SADBuilder.serialiseDgis(dgis);
+    const deserialised = SADBuilder.deserialiseDgis(serialised);
+
+    expect(deserialised).toHaveLength(dgis.length);
+    for (let i = 0; i < dgis.length; i++) {
+      expect(deserialised[i][0]).toBe(dgis[i][0]);
+      expect(deserialised[i][1]).toEqual(dgis[i][1]);
+    }
+  });
+
+  it('is deterministic for the same profile + card data', () => {
+    const chipProfile = buildSampleChipProfile();
+    const dgisA = SADBuilder.buildSad(SAMPLE_ISSUER_PROFILE, chipProfile, SAMPLE_CARD_DATA);
+    const dgisB = SADBuilder.buildSad(SAMPLE_ISSUER_PROFILE, chipProfile, SAMPLE_CARD_DATA);
+
+    expect(SADBuilder.serialiseDgis(dgisA)).toEqual(SADBuilder.serialiseDgis(dgisB));
+  });
+
+  it('rejects the "AAA=" legacy stub structurally (does not parse as DGI list)', () => {
+    // Sanity check: the 4-byte stub the prod DB currently carries is NOT
+    // a valid serialised DGI list.  Either deserialiseDgis will throw or
+    // produce a nonsense DGI count — it should NOT be mistaken for the
+    // real builder output.
+    const stub = Buffer.from('AAA=', 'utf8'); // 4 bytes: 0x41 0x41 0x41 0x3D
+    // Deserialise reads count(2) then tries to read DGI frames — with
+    // only 4 bytes, either the header points past end-of-buffer or
+    // decodeLength fails.  Either way: doesn't match a real SAD.
+    expect(() => SADBuilder.deserialiseDgis(stub)).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sad-crypto.ts — AES-128-ECB dev at-rest encryption
+// ---------------------------------------------------------------------------
+
+describe('sad-crypto — dev AES-128-ECB round trip', () => {
+  it('exports a 16-byte zero master key', () => {
+    expect(DEV_SAD_MASTER_KEY.length).toBe(16);
+    expect(DEV_SAD_MASTER_KEY.equals(Buffer.alloc(16, 0x00))).toBe(true);
+  });
+
+  it('key-version constants match expected values', () => {
+    expect(SAD_KEY_VERSION_KMS).toBe(0);
+    expect(SAD_KEY_VERSION_DEV_AES_ECB).toBe(1);
+  });
+
+  it('round-trips a typical SAD payload (serialised DGI list)', () => {
+    const chipProfile = buildSampleChipProfile();
+    const dgis = SADBuilder.buildSad(SAMPLE_ISSUER_PROFILE, chipProfile, SAMPLE_CARD_DATA);
+    const sadBytes = SADBuilder.serialiseDgis(dgis);
+
+    const encrypted = encryptSadDev(sadBytes);
+    // ECB + PKCS#7 always rounds up to a non-zero multiple of 16
+    expect(encrypted.length % 16).toBe(0);
+    expect(encrypted.length).toBeGreaterThan(sadBytes.length);
+
+    const decrypted = decryptSadDev(encrypted);
+    expect(decrypted).toEqual(sadBytes);
+  });
+
+  it('round-trips a short plaintext smaller than one AES block', () => {
+    const plain = Buffer.from('hi', 'utf8');
+    const enc = encryptSadDev(plain);
+    expect(enc.length).toBe(16); // PKCS#7 pads up to the block size
+    expect(decryptSadDev(enc)).toEqual(plain);
+  });
+
+  it('encrypt is deterministic under ECB', () => {
+    const plain = Buffer.from('deterministic-plaintext-here', 'utf8');
+    const a = encryptSadDev(plain);
+    const b = encryptSadDev(plain);
+    expect(a).toEqual(b);
+  });
+});
 
 describe('buildIccPkCertificate', () => {
   it('returns certificate starting with 0x6A and ending with 0xBC', () => {

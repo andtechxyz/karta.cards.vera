@@ -20,6 +20,13 @@ export { buildIad } from './iad-builder.js';
 export type { Scheme } from './iad-builder.js';
 export { SADBuilder } from './sad-builder.js';
 export type { CardData, IssuerProfileForSad } from './sad-builder.js';
+export {
+  encryptSadDev,
+  decryptSadDev,
+  DEV_SAD_MASTER_KEY,
+  SAD_KEY_VERSION_DEV_AES_ECB,
+  SAD_KEY_VERSION_KMS,
+} from './sad-crypto.js';
 export { APDUBuilder } from './apdu-builder.js';
 export { buildIccPkCertificate } from './icc-cert-builder.js';
 export type { IccCertInput } from './icc-cert-builder.js';
