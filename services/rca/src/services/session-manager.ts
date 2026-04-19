@@ -230,36 +230,62 @@ export class SessionManager {
       data: { phase: 'SAD_TRANSFER', iccPublicKey: iccPubkey },
     });
 
-    // Get the real SAD payload — decrypt per the sadKeyVersion written
-    // by data-prep:
-    //   0 = AWS KMS envelope (prod) — envelope decrypt not wired into the
-    //       RCA yet; the prod provisioning lane will land with this branch
-    //       in place once Phase-2 keys are live.  Today we log + fall back.
-    //   1 = AES-128-ECB under the static dev master key (local/e2e/pre-
-    //       Phase-2 staging).  decryptSadDev from @vera/emv inverts the
-    //       matching encryptSadDev path in the data-prep service.
-    // Anything else → fall back to the hex-stub PALISADE placeholder so
-    // historic pre-regen records (e.g. the literal "AAA=" stub) don't
-    // crash the relay; they'll just produce SW=6F00 at TRANSFER_SAD and
-    // force an operator to regen via scripts/regen-sad-e2e.ts.
-    const sadPayload = this.resolveSadPayload(sessionId, session.sadRecord);
-
-    // Get chip profile DGI references
+    // Build TRANSFER_SAD payload in the exact layout the PA applet's
+    // processTransferSad() parses (palisade-pa/src/com/palisade/pa/
+    // ProvisioningAgent.java:481).  PA parses from the END of the buffer:
+    //
+    //   [SAD_DGIs:var] [bank_id:4] [prog_id:4] [scheme:1] [ts:4]
+    //     [url:var] [url_len:1] [iccPrivDgi:2] [iccPrivEmvTag:2]
+    //
+    // The "SAD_DGIs" portion here is a minimal in-applet-consumable record
+    // list — [dgi_tag:2][len:1][data]* — NOT the full EMV-structured SAD
+    // that @vera/emv's SAD builder produces (that heavier format is for
+    // the payment applet's own STORE DATA and is built separately by
+    // data-prep; it's not what the PA's processTransferSad consumes).
+    //
+    // Mirror palisade-rca/app/services/session_manager.py:227 — a single
+    // DGI 0x0101 with TLV tag 0x50 (App Label) is enough to get the PA
+    // to 9000 on TRANSFER_SAD and advance state to PERSO_IN_PROGRESS.
+    // Replace the minimal SAD with real DGIs sourced from data-prep once
+    // we need the payment applet to actually hold per-card EMV data.
     const chipProfile = session.card?.program?.issuerProfile?.chipProfile;
     const iccPrivDgi = chipProfile?.iccPrivateKeyDgi ?? 0x8001;
     const iccPrivTag = chipProfile?.iccPrivateKeyTag ?? 0x9F48;
 
-    // Build timestamp
+    // Minimal SAD — one DGI 0x0101 carrying TLV 0x50 (App Label) "PALISADE"
+    const appLabel = Buffer.from('PALISADE', 'ascii');
+    const tlv50 = Buffer.concat([Buffer.from([0x50, appLabel.length]), appLabel]);
+    const dgi0101 = Buffer.concat([Buffer.from([0x01, 0x01, tlv50.length]), tlv50]);
+    const sadPayload = dgi0101;
+
+    // Metadata tail — keep these as placeholders until data-prep starts
+    // sourcing real per-FI values from IssuerProfile.  PA only writes the
+    // bytes to NVM; it doesn't enforce structure on bank_id / prog_id /
+    // scheme / url beyond length.
+    const bankId = Buffer.from([0x00, 0x00, 0x00, 0x01]);
+    const progId = Buffer.from([0x00, 0x00, 0x00, 0x01]);
+    const scheme = Buffer.from([0x01]); // 0x01 = Mastercard, 0x02 = Visa
     const timestamp = Math.floor(Date.now() / 1000);
     const tsBuf = Buffer.alloc(4);
     tsBuf.writeUInt32BE(timestamp, 0);
+    const bankUrl = Buffer.from('mobile.karta.cards', 'ascii');
+    const urlLen = Buffer.from([bankUrl.length]);
+    const dgiTag = Buffer.alloc(2);
+    dgiTag.writeUInt16BE(iccPrivDgi, 0);
+    const emvTag = Buffer.alloc(2);
+    emvTag.writeUInt16BE(iccPrivTag, 0);
 
-    // Build TRANSFER_SAD APDU data
-    const dgiRef = Buffer.alloc(4);
-    dgiRef.writeUInt16BE(iccPrivDgi, 0);
-    dgiRef.writeUInt16BE(iccPrivTag, 2);
-
-    const transferData = Buffer.concat([sadPayload, tsBuf, dgiRef]);
+    const transferData = Buffer.concat([
+      sadPayload,
+      bankId,
+      progId,
+      scheme,
+      tsBuf,
+      bankUrl,
+      urlLen,
+      dgiTag,
+      emvTag,
+    ]);
 
     const lc = transferData.length;
     let transferApdu: Buffer;
