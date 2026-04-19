@@ -6,6 +6,7 @@ import { purgeExpiredRetrievalTokens, startSweeper } from '@vera/retention';
 import { getVaultConfig } from './env.js';
 import { startAuditSubscriber } from './vault/index.js';
 import storeRouter from './routes/store.routes.js';
+import registerRouter from './routes/register.routes.js';
 import tokensRouter from './routes/tokens.routes.js';
 import proxyRouter from './routes/proxy.routes.js';
 import auditRouter from './routes/audit.routes.js';
@@ -34,6 +35,7 @@ app.get('/api/health', (_req, res) => {
 const vaultRouter = express.Router();
 vaultRouter.use(requireSignedRequest({ keys: config.SERVICE_AUTH_KEYS }));
 vaultRouter.use(storeRouter);
+vaultRouter.use(registerRouter);
 vaultRouter.use(tokensRouter);
 vaultRouter.use(proxyRouter);
 vaultRouter.use(auditRouter);

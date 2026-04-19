@@ -103,6 +103,7 @@ const SERVICE_AUTH_KEYS: Record<string, string> = {
   pay: '5'.repeat(64),
   activation: '6'.repeat(64),
   admin: '7'.repeat(64),
+  palisade: '8'.repeat(64),
 };
 
 // ---------------------------------------------------------------------------
@@ -111,6 +112,7 @@ const SERVICE_AUTH_KEYS: Record<string, string> = {
 
 import { errorMiddleware } from '@vera/core';
 import storeRouter from '../../services/vault/src/routes/store.routes.js';
+import registerRouter from '../../services/vault/src/routes/register.routes.js';
 import tokensRouter from '../../services/vault/src/routes/tokens.routes.js';
 import cardsRouter from '../../services/vault/src/routes/cards.routes.js';
 import auditRouter from '../../services/vault/src/routes/audit.routes.js';
@@ -127,6 +129,7 @@ function buildApp(): Express {
   const vaultRouter = express.Router();
   vaultRouter.use(requireSignedRequest({ keys: SERVICE_AUTH_KEYS }));
   vaultRouter.use(storeRouter);
+  vaultRouter.use(registerRouter);
   vaultRouter.use(tokensRouter);
   vaultRouter.use(cardsRouter);
   vaultRouter.use(auditRouter);
@@ -203,6 +206,52 @@ describe('Vault service — integration', () => {
       expect(res.body).toHaveProperty('vaultEntryId');
       expect(res.body).toHaveProperty('panLast4', '4242');
       expect(res.body).toHaveProperty('deduped', false);
+    });
+  });
+
+  // ---- Register (Palisade-facing) ----
+  describe('POST /api/vault/register', () => {
+    const registerPath = '/api/vault/register';
+    const registerBody = {
+      pan: '4242424242424242',
+      expiryMonth: '12',
+      expiryYear: '2028',
+      cardholderName: 'Test User',
+      idempotencyKey: 'card_ref_abc123xyz',
+    };
+
+    it('rejects without HMAC', async () => {
+      const res = await request(app)
+        .post(registerPath)
+        .send(registerBody);
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 201 with vaultToken for a Palisade-signed request', async () => {
+      const headers = signedHeaders('POST', registerPath, registerBody, 'palisade');
+      const res = await request(app)
+        .post(registerPath)
+        .set(headers)
+        .send(registerBody);
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveProperty('vaultToken', 'vault-entry-1');
+      expect(res.body).toHaveProperty('panLast4', '4242');
+      // Palisade boundary — the response MUST NOT leak the internal Prisma
+      // field name; vaultEntryId on this surface would signal a schema FK
+      // coupling that Phase 2 explicitly cuts.
+      expect(res.body).not.toHaveProperty('vaultEntryId');
+      expect(res.body).not.toHaveProperty('deduped');
+    });
+
+    it('rejects when idempotencyKey is missing', async () => {
+      const bad = { ...registerBody };
+      delete (bad as Partial<typeof registerBody>).idempotencyKey;
+      const headers = signedHeaders('POST', registerPath, bad, 'palisade');
+      const res = await request(app)
+        .post(registerPath)
+        .set(headers)
+        .send(bad);
+      expect(res.status).toBe(400);
     });
   });
 

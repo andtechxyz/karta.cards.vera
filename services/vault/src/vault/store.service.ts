@@ -32,6 +32,22 @@ export async function storeCard(input: StoreInput): Promise<StoreResult> {
   const panLast4 = pan.slice(-4);
   const panBin = pan.slice(0, 6);
 
+  // Idempotency-key lookup takes precedence over fingerprint dedup.  A caller
+  // (Palisade) that retries with the same idempotencyKey gets back the exact
+  // same vault entry, independent of fingerprint / onDuplicate policy.
+  if (input.idempotencyKey) {
+    const prior = await prisma.vaultEntry.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+    });
+    if (prior) {
+      return {
+        vaultEntryId: prior.id,
+        panLast4: prior.panLast4,
+        deduped: true,
+      };
+    }
+  }
+
   // Dedup check.
   const existing = await prisma.vaultEntry.findUnique({
     where: { panFingerprint: fp },
@@ -81,6 +97,7 @@ export async function storeCard(input: StoreInput): Promise<StoreResult> {
       encryptedPan: enc.ciphertext,
       keyVersion: enc.keyVersion,
       panFingerprint: fp,
+      idempotencyKey: input.idempotencyKey,
     },
   });
 

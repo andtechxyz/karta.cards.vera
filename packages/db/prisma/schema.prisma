@@ -449,6 +449,13 @@ model VaultEncryptionKey {
 model VaultEntry {
   id String @id @default(cuid())
 
+  // Caller-supplied idempotency key for the cross-service register path
+  // (Palisade → POST /api/vault/register).  Lets a retry safely return the
+  // same vaultToken without creating a duplicate entry.  Unique so colliding
+  // keys from distinct callers surface loudly; nullable because the internal
+  // admin /store path doesn't use it.
+  idempotencyKey String? @unique
+
   // --- plaintext metadata (safe for display, never needs decrypt) ----------
   panLast4       String
   panBin         String // first 6 of PAN
