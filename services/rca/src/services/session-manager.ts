@@ -13,12 +13,7 @@
  */
 
 import { prisma } from '@vera/db';
-import {
-  APDUBuilder,
-  decryptSadDev,
-  SAD_KEY_VERSION_DEV_AES_ECB,
-  SAD_KEY_VERSION_KMS,
-} from '@vera/emv';
+import { APDUBuilder } from '@vera/emv';
 
 import { getRcaConfig } from '../env.js';
 
@@ -394,47 +389,6 @@ export class SessionManager {
       { type: 'apdu', hex: APDUBuilder.confirm(), phase: 'confirming', progress: 0.95 },
       { type: 'complete', proxyCardId: session.sadRecord.proxyCardId },
     ];
-  }
-
-  /**
-   * Decrypt the SadRecord bytes (or fall back to a stub) so the PA applet
-   * receives a TLV/DGI blob it can actually parse rather than the historic
-   * `AAA=` stub that caused every TRANSFER_SAD to return SW=6F00.
-   *
-   * The fall-through path stays loud on purpose — every path that doesn't
-   * return real SAD bytes logs a warning pointing at the regen script.
-   */
-  private resolveSadPayload(
-    sessionId: string,
-    rec: { sadEncrypted: Uint8Array; sadKeyVersion: number } | null | undefined,
-  ): Buffer {
-    if (!rec || rec.sadEncrypted.length === 0) {
-      return Buffer.from('0101085008 PALISADE'.replace(/ /g, ''), 'hex');
-    }
-    try {
-      const encBuf = Buffer.from(rec.sadEncrypted);
-      if (rec.sadKeyVersion === SAD_KEY_VERSION_DEV_AES_ECB) {
-        return decryptSadDev(encBuf);
-      }
-      if (rec.sadKeyVersion === SAD_KEY_VERSION_KMS) {
-        // Prod KMS envelope — not yet wired in the RCA.  Surface a loud
-        // warning so the first prod tap after Phase-2 lights up as a config
-        // gap rather than a silent 6F00.
-        throw new Error(
-          'KMS-encrypted SAD (keyVersion=0) decrypt not implemented in RCA yet',
-        );
-      }
-      throw new Error(
-        `unsupported sadKeyVersion=${rec.sadKeyVersion} on SadRecord`,
-      );
-    } catch (err) {
-      console.warn(
-        `[rca] SAD decrypt failed for session ${sessionId} ` +
-        `(keyVersion=${rec.sadKeyVersion}, len=${rec.sadEncrypted.length}): ${err instanceof Error ? err.message : err}. ` +
-        `Falling back to placeholder — expect SW=6F00 on TRANSFER_SAD; regen via scripts/regen-sad-e2e.ts.`,
-      );
-      return Buffer.from('0101085008 PALISADE'.replace(/ /g, ''), 'hex');
-    }
   }
 
   /**
