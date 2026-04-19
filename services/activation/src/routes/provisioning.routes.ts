@@ -37,6 +37,17 @@ export function createProvisioningRouter(): Router {
     });
     if (!card) throw notFound('card_not_found', 'Card not found');
     if (card.status !== 'ACTIVATED') throw badRequest('invalid_status', `Card is ${card.status}, expected ACTIVATED`);
+    // Guard: SAD must have been staged at register-time (or via the admin
+    // re-stage endpoint).  If proxyCardId is null, data-prep was unreachable
+    // when the card was first registered and SAD never landed — fail loudly
+    // with an actionable error instead of forwarding null to RCA and getting
+    // back a cryptic Zod validation 400.
+    if (!card.proxyCardId) {
+      throw badRequest(
+        'sad_not_staged',
+        'No SAD staged for this card (proxyCardId is null) — data-prep was unreachable at registration. Ask an admin to re-stage SAD.',
+      );
+    }
 
     // When PALISADE_RCA_URL is unset, run in mock mode so local dev + e2e
     // tests can exercise the full mobile provisioning flow without a real
