@@ -9,8 +9,12 @@ vi.mock('@vera/db', async (importActual) => {
   return {
     ...actual,
     prisma: {
+      // Card.findUnique remains a local read for the transitional
+      // vaultEntryId stamp in createTransaction — dropped when Phase 3
+      // Step 3 moves Card out of Vera and Palisade's lookupCard starts
+      // returning vaultToken.  See transaction.service.ts comment.
       card: {
-        update: vi.fn(),
+        findUnique: vi.fn(),
       },
       tokenisationProgram: {
         findUnique: vi.fn(),
@@ -27,22 +31,26 @@ vi.mock('@vera/db', async (importActual) => {
   };
 });
 
-// Card state now comes over HTTP from Palisade — mock the lookupCard helper
-// instead of prisma.card.findUnique.  The shape is the CardState contract
-// from cards/palisade-client.ts.
+// Card state, ATC, and credentials now come over HTTP from Palisade — mock
+// the palisade-client module instead of prisma.card.*.  Shapes match the
+// contracts in cards/palisade-client.ts.
 vi.mock('../cards/index.js', () => ({
   lookupCard: vi.fn(),
+  incrementAtc: vi.fn(),
+  listWebAuthnCredentials: vi.fn(),
 }));
 
 import { prisma } from '@vera/db';
 import {
   createTransaction,
   getTransactionByRlid,
+  getTransactionCardSummary,
   getTransactionForAuthOrThrow,
+  listTransactions,
   reserveAtc,
   updateStatus,
 } from './transaction.service.js';
-import { lookupCard } from '../cards/index.js';
+import { incrementAtc, listWebAuthnCredentials, lookupCard } from '../cards/index.js';
 type Mocked<T> = ReturnType<typeof vi.fn> & T;
 
 function activatedCard(
@@ -65,6 +73,8 @@ const txnFindUnique = () =>
   prisma.transaction.findUnique as unknown as Mocked<typeof prisma.transaction.findUnique>;
 const txnFindUniqueOrThrow = () =>
   prisma.transaction.findUniqueOrThrow as unknown as Mocked<typeof prisma.transaction.findUniqueOrThrow>;
+const txnFindMany = () =>
+  prisma.transaction.findMany as unknown as Mocked<typeof prisma.transaction.findMany>;
 const txnCreate = () =>
   prisma.transaction.create as unknown as Mocked<typeof prisma.transaction.create>;
 const txnUpdate = () =>
@@ -72,14 +82,18 @@ const txnUpdate = () =>
 const txnUpdateMany = () =>
   prisma.transaction.updateMany as unknown as Mocked<typeof prisma.transaction.updateMany>;
 const lookupCardMock = () => lookupCard as unknown as Mocked<typeof lookupCard>;
-const cardUpdate = () =>
-  prisma.card.update as unknown as Mocked<typeof prisma.card.update>;
+const incrementAtcMock = () => incrementAtc as unknown as Mocked<typeof incrementAtc>;
+const listCredsMock = () =>
+  listWebAuthnCredentials as unknown as Mocked<typeof listWebAuthnCredentials>;
+const cardFindUnique = () =>
+  prisma.card.findUnique as unknown as Mocked<typeof prisma.card.findUnique>;
 const tokenisationProgramFindUnique = () =>
   prisma.tokenisationProgram.findUnique as unknown as Mocked<typeof prisma.tokenisationProgram.findUnique>;
 
 beforeEach(() => {
   vi.mocked(txnFindUnique()).mockReset();
   vi.mocked(txnFindUniqueOrThrow()).mockReset();
+  vi.mocked(txnFindMany()).mockReset();
   vi.mocked(txnCreate()).mockReset().mockImplementation(async (args: unknown) => {
     const typed = args as { data: Record<string, unknown> };
     // Echo data back plus an id — enough for the service to return a "created".
@@ -88,7 +102,9 @@ beforeEach(() => {
   vi.mocked(txnUpdate()).mockReset();
   vi.mocked(txnUpdateMany()).mockReset().mockResolvedValue({ count: 1 } as never);
   vi.mocked(lookupCardMock()).mockReset();
-  vi.mocked(cardUpdate()).mockReset();
+  vi.mocked(incrementAtcMock()).mockReset();
+  vi.mocked(listCredsMock()).mockReset();
+  vi.mocked(cardFindUnique()).mockReset().mockResolvedValue({ vaultEntryId: null } as never);
   vi.mocked(tokenisationProgramFindUnique()).mockReset().mockResolvedValue(null);
 });
 
@@ -164,6 +180,7 @@ describe('createTransaction', () => {
 
   it('creates a transaction with default rules + TIER_1 for a small AUD amount on an unlinked card', async () => {
     vi.mocked(lookupCardMock()).mockResolvedValue(activatedCard() as never);
+    vi.mocked(cardFindUnique()).mockResolvedValue({ vaultEntryId: 've_1' } as never);
 
     await createTransaction({
       cardId: 'card_1',
@@ -195,6 +212,38 @@ describe('createTransaction', () => {
     // rlid should be 12 chars of the chosen alphabet.
     expect(typeof data.rlid).toBe('string');
     expect((data.rlid as string).length).toBe(12);
+
+    // Denormalised card display fields are stamped from the Palisade lookup.
+    expect(data.cardRef).toBe('cardref_card_1');
+    expect(data.panLast4).toBe('4242');
+    expect(data.panBin).toBe('411111');
+    expect(data.cardholderName).toBe('Test User');
+    // vaultEntryId is pulled from the local Card.findUnique (transitional
+    // stamp — Phase 3 Step 3 will relocate this source).
+    expect(data.vaultEntryId).toBe('ve_1');
+  });
+
+  it('stamps null display fields when Palisade projection has nulls', async () => {
+    vi.mocked(lookupCardMock()).mockResolvedValue({
+      ...activatedCard(),
+      panLast4: null,
+      panBin: null,
+      cardholderName: null,
+    } as never);
+
+    await createTransaction({
+      cardId: 'card_1',
+      amount: 100,
+      currency: 'AUD',
+      merchantRef: 'order_1',
+    });
+
+    const data = vi.mocked(txnCreate()).mock.calls[0]![0]!.data as Record<string, unknown>;
+    expect(data.panLast4).toBeNull();
+    expect(data.panBin).toBeNull();
+    expect(data.cardholderName).toBeNull();
+    // Un-vaulted dev card → vaultEntryId stays null on the row.
+    expect(data.vaultEntryId).toBeNull();
   });
 
   it('routes AUD 100+ to TIER_2 (CROSS_PLATFORM only) via DEFAULT_TIER_RULES', async () => {
@@ -364,15 +413,94 @@ describe('updateStatus', () => {
 // --- reserveAtc -------------------------------------------------------------
 
 describe('reserveAtc', () => {
-  it('increments and returns the new ATC', async () => {
-    vi.mocked(cardUpdate()).mockResolvedValue({ atc: 7 } as never);
+  it('PATCHes Palisade atc-increment and returns the new ATC', async () => {
+    vi.mocked(incrementAtcMock()).mockResolvedValue({ atc: 7 } as never);
 
     const atc = await reserveAtc('card_1');
     expect(atc).toBe(7);
 
-    const call = vi.mocked(cardUpdate()).mock.calls[0]![0]!;
-    expect(call.where).toEqual({ id: 'card_1' });
-    expect(call.data).toEqual({ atc: { increment: 1 } });
+    expect(incrementAtcMock()).toHaveBeenCalledOnce();
+    const [cardId, opts] = vi.mocked(incrementAtcMock()).mock.calls[0]!;
+    expect(cardId).toBe('card_1');
+    expect(opts.keyId).toBe('pay');
+  });
+});
+
+// --- listTransactions -------------------------------------------------------
+
+describe('listTransactions', () => {
+  it('reads rows with no Card join — denormalised display fields live on Transaction', async () => {
+    vi.mocked(txnFindMany()).mockResolvedValue([
+      {
+        id: 'txn_1',
+        cardRef: 'cardref_card_1',
+        panLast4: '4242',
+      },
+    ] as never);
+
+    const rows = await listTransactions();
+    expect(rows).toHaveLength(1);
+
+    // Critical: no `include.card` — the query must be a single-table read.
+    const call = vi.mocked(txnFindMany()).mock.calls[0]![0]!;
+    expect(call).not.toHaveProperty('include');
+    expect(call.orderBy).toEqual({ createdAt: 'desc' });
+    expect(call.take).toBe(100);
+  });
+
+  it('clamps limit at 500', async () => {
+    vi.mocked(txnFindMany()).mockResolvedValue([] as never);
+    await listTransactions(10_000);
+    const call = vi.mocked(txnFindMany()).mock.calls[0]![0]!;
+    expect(call.take).toBe(500);
+  });
+});
+
+// --- getTransactionCardSummary ----------------------------------------------
+
+describe('getTransactionCardSummary', () => {
+  it('reads denormalised panLast4 off Transaction and fetches creds from Palisade', async () => {
+    vi.mocked(txnFindUnique()).mockResolvedValue({
+      cardId: 'card_1',
+      panLast4: '4242',
+    } as never);
+    vi.mocked(listCredsMock()).mockResolvedValue([
+      { kind: 'PLATFORM' },
+      { kind: 'CROSS_PLATFORM' },
+    ] as never);
+
+    const out = await getTransactionCardSummary('rl_1');
+
+    expect(out).toEqual({
+      id: 'card_1',
+      panLast4: '4242',
+      credentials: [{ kind: 'PLATFORM' }, { kind: 'CROSS_PLATFORM' }],
+    });
+
+    expect(listCredsMock()).toHaveBeenCalledWith('card_1', expect.any(Object));
+  });
+
+  it('returns null panLast4 when the denorm field is null', async () => {
+    vi.mocked(txnFindUnique()).mockResolvedValue({
+      cardId: 'card_1',
+      panLast4: null,
+    } as never);
+    vi.mocked(listCredsMock()).mockResolvedValue([] as never);
+
+    const out = await getTransactionCardSummary('rl_1');
+    expect(out.panLast4).toBeNull();
+    expect(out.credentials).toEqual([]);
+  });
+
+  it('throws 404 transaction_not_found when the rlid is unknown', async () => {
+    vi.mocked(txnFindUnique()).mockResolvedValue(null);
+
+    await expect(getTransactionCardSummary('rl_missing')).rejects.toMatchObject({
+      status: 404,
+      code: 'transaction_not_found',
+    });
+    // No Palisade call when there's no row to locate a cardId on.
+    expect(listCredsMock()).not.toHaveBeenCalled();
   });
 });
 

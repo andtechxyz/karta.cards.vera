@@ -31,14 +31,17 @@ export interface OrchestratePostAuthResult {
 export async function orchestratePostAuth(
   input: OrchestratePostAuthInput,
 ): Promise<OrchestratePostAuthResult> {
+  // Post-split: all the fields the orchestration needs (cardId, panBin,
+  // vaultEntryId) are denormalised onto the Transaction row at create time,
+  // so we read them directly with no Card → VaultEntry join.  See
+  // schema.prisma Transaction model + transaction.service.ts::createTransaction.
   const txn = await prisma.transaction.findUniqueOrThrow({
     where: { id: input.transactionId },
-    include: { card: { include: { vaultEntry: true } } },
   });
 
   const rlid = txn.rlid;
 
-  if (!txn.card.vaultEntry || !txn.card.vaultEntryId) {
+  if (!txn.vaultEntryId || !txn.panBin) {
     await fail(txn.id, rlid, 'card_not_vaulted');
     throw badRequest('card_not_vaulted', 'Card has no vault entry');
   }
@@ -56,8 +59,8 @@ export async function orchestratePostAuth(
     // --- 2. Generate OBO ARQC ---------------------------------------------
     const atc = await reserveAtc(txn.cardId);
     const arqcInput = {
-      bin: txn.card.vaultEntry.panBin,
-      cardId: txn.card.id,
+      bin: txn.panBin,
+      cardId: txn.cardId,
       atc,
       amount: txn.amount,
       currency: txn.currency,
@@ -78,7 +81,7 @@ export async function orchestratePostAuth(
       secret: config.SERVICE_AUTH_PAY_SECRET,
     });
     const tokenResult = await vaultClient.mintToken({
-      vaultEntryId: txn.card.vaultEntryId,
+      vaultEntryId: txn.vaultEntryId,
       amount: txn.amount,
       currency: txn.currency,
       purpose: `orchestration:${rlid}`,
