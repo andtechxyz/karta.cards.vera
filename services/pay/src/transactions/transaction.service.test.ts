@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CardStatus, CredentialKind, Tier, TransactionStatus } from '@vera/db';
+import { CredentialKind, Tier, TransactionStatus } from '@vera/db';
 
 // Mock Prisma — the service is otherwise pure wiring around the card record
 // resolver, tier-rule evaluator, and state-machine assertions (all three are
@@ -10,7 +10,6 @@ vi.mock('@vera/db', async (importActual) => {
     ...actual,
     prisma: {
       card: {
-        findUnique: vi.fn(),
         update: vi.fn(),
       },
       tokenisationProgram: {
@@ -28,6 +27,13 @@ vi.mock('@vera/db', async (importActual) => {
   };
 });
 
+// Card state now comes over HTTP from Palisade — mock the lookupCard helper
+// instead of prisma.card.findUnique.  The shape is the CardState contract
+// from cards/palisade-client.ts.
+vi.mock('../cards/index.js', () => ({
+  lookupCard: vi.fn(),
+}));
+
 import { prisma } from '@vera/db';
 import {
   createTransaction,
@@ -36,13 +42,22 @@ import {
   reserveAtc,
   updateStatus,
 } from './transaction.service.js';
+import { lookupCard } from '../cards/index.js';
 type Mocked<T> = ReturnType<typeof vi.fn> & T;
 
-function activatedCard(overrides: Partial<{ programId: string | null; status: CardStatus; id: string }> = {}) {
+function activatedCard(
+  overrides: Partial<{ programId: string | null; status: string; id: string }> = {},
+) {
   return {
     id: overrides.id ?? 'card_1',
-    status: overrides.status ?? CardStatus.ACTIVATED,
+    cardRef: `cardref_${overrides.id ?? 'card_1'}`,
+    status: overrides.status ?? 'ACTIVATED',
     programId: overrides.programId ?? null,
+    retailSaleStatus: null,
+    chipSerial: null,
+    panLast4: '4242',
+    panBin: '411111',
+    cardholderName: 'Test User',
   };
 }
 
@@ -56,8 +71,7 @@ const txnUpdate = () =>
   prisma.transaction.update as unknown as Mocked<typeof prisma.transaction.update>;
 const txnUpdateMany = () =>
   prisma.transaction.updateMany as unknown as Mocked<typeof prisma.transaction.updateMany>;
-const cardFindUnique = () =>
-  prisma.card.findUnique as unknown as Mocked<typeof prisma.card.findUnique>;
+const lookupCardMock = () => lookupCard as unknown as Mocked<typeof lookupCard>;
 const cardUpdate = () =>
   prisma.card.update as unknown as Mocked<typeof prisma.card.update>;
 const tokenisationProgramFindUnique = () =>
@@ -73,7 +87,7 @@ beforeEach(() => {
   });
   vi.mocked(txnUpdate()).mockReset();
   vi.mocked(txnUpdateMany()).mockReset().mockResolvedValue({ count: 1 } as never);
-  vi.mocked(cardFindUnique()).mockReset();
+  vi.mocked(lookupCardMock()).mockReset();
   vi.mocked(cardUpdate()).mockReset();
   vi.mocked(tokenisationProgramFindUnique()).mockReset().mockResolvedValue(null);
 });
@@ -81,7 +95,7 @@ beforeEach(() => {
 // --- createTransaction -------------------------------------------------------
 
 describe('createTransaction', () => {
-  it('rejects non-positive amount with 400 invalid_amount (no Prisma calls)', async () => {
+  it('rejects non-positive amount with 400 invalid_amount (no Palisade call)', async () => {
     await expect(
       createTransaction({
         cardId: 'card_1',
@@ -90,11 +104,16 @@ describe('createTransaction', () => {
         merchantRef: 'order_1',
       }),
     ).rejects.toMatchObject({ status: 400, code: 'invalid_amount' });
-    expect(cardFindUnique()).not.toHaveBeenCalled();
+    expect(lookupCardMock()).not.toHaveBeenCalled();
   });
 
-  it('rejects unknown card with 404 card_not_found', async () => {
-    vi.mocked(cardFindUnique()).mockResolvedValue(null);
+  it('rejects unknown card with 404 card_not_found (propagated from Palisade)', async () => {
+    // Real lookupCard maps Palisade's 404 to a notFound ApiError — simulate that.
+    const notFoundErr = Object.assign(new Error('Card not found in Palisade'), {
+      status: 404,
+      code: 'card_not_found',
+    });
+    vi.mocked(lookupCardMock()).mockRejectedValue(notFoundErr);
 
     await expect(
       createTransaction({
@@ -107,8 +126,8 @@ describe('createTransaction', () => {
   });
 
   it('rejects non-ACTIVATED card with 400 card_not_activated', async () => {
-    vi.mocked(cardFindUnique()).mockResolvedValue(
-      activatedCard({ status: CardStatus.PERSONALISED }) as never,
+    vi.mocked(lookupCardMock()).mockResolvedValue(
+      activatedCard({ status: 'PERSONALISED' }) as never,
     );
 
     await expect(
@@ -122,7 +141,7 @@ describe('createTransaction', () => {
   });
 
   it('rejects currency mismatch when the card program pins a different currency', async () => {
-    vi.mocked(cardFindUnique()).mockResolvedValue(
+    vi.mocked(lookupCardMock()).mockResolvedValue(
       activatedCard({ programId: 'prog_usd' }) as never,
     );
     vi.mocked(tokenisationProgramFindUnique()).mockResolvedValue({
@@ -144,7 +163,7 @@ describe('createTransaction', () => {
   });
 
   it('creates a transaction with default rules + TIER_1 for a small AUD amount on an unlinked card', async () => {
-    vi.mocked(cardFindUnique()).mockResolvedValue(activatedCard() as never);
+    vi.mocked(lookupCardMock()).mockResolvedValue(activatedCard() as never);
 
     await createTransaction({
       cardId: 'card_1',
@@ -153,6 +172,14 @@ describe('createTransaction', () => {
       merchantRef: 'order_1',
       merchantName: 'Verdant Co.',
     });
+
+    // Verify we called Palisade with the right auth parameters.
+    expect(lookupCardMock()).toHaveBeenCalledOnce();
+    const [cardId, opts] = vi.mocked(lookupCardMock()).mock.calls[0]!;
+    expect(cardId).toBe('card_1');
+    expect(opts.keyId).toBe('pay');
+    expect(opts.baseUrl).toBeTruthy();
+    expect(opts.secret).toMatch(/^[0-9a-f]{64}$/);
 
     expect(txnCreate()).toHaveBeenCalledOnce();
     const data = vi.mocked(txnCreate()).mock.calls[0]![0]!.data as Record<string, unknown>;
@@ -171,7 +198,7 @@ describe('createTransaction', () => {
   });
 
   it('routes AUD 100+ to TIER_2 (CROSS_PLATFORM only) via DEFAULT_TIER_RULES', async () => {
-    vi.mocked(cardFindUnique()).mockResolvedValue(activatedCard() as never);
+    vi.mocked(lookupCardMock()).mockResolvedValue(activatedCard() as never);
 
     await createTransaction({
       cardId: 'card_1',
@@ -186,7 +213,7 @@ describe('createTransaction', () => {
   });
 
   it('respects a program-specific rule set when the card is linked', async () => {
-    vi.mocked(cardFindUnique()).mockResolvedValue(
+    vi.mocked(lookupCardMock()).mockResolvedValue(
       activatedCard({ programId: 'prog_x' }) as never,
     );
     vi.mocked(tokenisationProgramFindUnique()).mockResolvedValue({

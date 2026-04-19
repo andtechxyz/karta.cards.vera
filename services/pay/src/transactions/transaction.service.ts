@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { customAlphabet } from 'nanoid';
-import { CardStatus, TransactionStatus } from '@prisma/client';
+import { TransactionStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@vera/db';
 import { badRequest, gone, notFound } from '@vera/core';
@@ -9,6 +9,14 @@ import { normaliseCurrency, resolveRulesFromTokenisationProgram } from '@vera/pr
 import { evaluateTierRules } from './tier.js';
 import { assertTransition } from './state-machine.js';
 import { getPayConfig } from '../env.js';
+import { lookupCard } from '../cards/index.js';
+
+// Palisade's canonical card lifecycle — mirrored here so pay can enforce
+// "must be ACTIVATED" without reaching into Palisade's @prisma/client.  Kept
+// as a string literal rather than an imported enum because the two repos
+// now have separate Prisma schemas and we deliberately don't depend on
+// Palisade's types.
+const CARD_STATUS_ACTIVATED = 'ACTIVATED';
 
 const rlidGen = customAlphabet('23456789abcdefghijkmnpqrstuvwxyz', 12);
 
@@ -24,12 +32,15 @@ export async function createTransaction(input: CreateTxnInput) {
   if (input.amount <= 0) {
     throw badRequest('invalid_amount', 'amount must be positive minor units');
   }
-  const card = await prisma.card.findUnique({
-    where: { id: input.cardId },
-    select: { id: true, status: true, programId: true },
+  // Card state lives in Palisade (Vera owns vault + transactions, not cards).
+  // lookupCard throws 404 notFound on unknown ids — we let that propagate.
+  const payConfig = getPayConfig();
+  const card = await lookupCard(input.cardId, {
+    baseUrl: payConfig.PALISADE_BASE_URL,
+    keyId: 'pay',
+    secret: payConfig.SERVICE_AUTH_PALISADE_SECRET,
   });
-  if (!card) throw notFound('card_not_found', 'Card not found');
-  if (card.status !== CardStatus.ACTIVATED) {
+  if (card.status !== CARD_STATUS_ACTIVATED) {
     throw badRequest('card_not_activated', `Card status is ${card.status}`);
   }
 
@@ -50,7 +61,7 @@ export async function createTransaction(input: CreateTxnInput) {
   }
   const decision = evaluateTierRules(rules, input.amount);
 
-  const ttl = getPayConfig().TRANSACTION_TTL_SECONDS;
+  const ttl = payConfig.TRANSACTION_TTL_SECONDS;
   const expiresAt = new Date(Date.now() + ttl * 1000);
   const challenge = crypto.randomBytes(32).toString('base64url');
   const rlid = rlidGen();
