@@ -12,6 +12,9 @@ vi.mock('@vera/db', () => ({
       findFirst: vi.fn(),
       update: vi.fn(),
     },
+    sadRecord: {
+      findFirst: vi.fn(),
+    },
     provisioningSession: {
       create: vi.fn(),
       findFirst: vi.fn(),
@@ -260,6 +263,7 @@ describe('POST /api/provisioning/start', () => {
 
     vi.mocked(sessionCreate()).mockResolvedValue({ id: 'ps_1' } as never);
     vi.mocked(cardUpdate()).mockResolvedValue({} as never);
+    vi.mocked(prisma.sadRecord.findFirst as any).mockResolvedValue({ id: 'sad_1' });
 
     const app = buildApp();
     const { status, body } = await inject(app, 'POST', '/api/provisioning/start', {
@@ -297,13 +301,14 @@ describe('POST /api/provisioning/start', () => {
       statusCode: 200,
       body: {
         json: vi.fn().mockResolvedValue({
-          session_id: 'rca_session_2',
-          ws_url: 'wss://rca.example.com/ws2',
+          sessionId: 'rca_session_2',
+          wsUrl: 'wss://rca.example.com/ws2',
         }),
       },
     } as any);
 
     vi.mocked(sessionCreate()).mockResolvedValue({ id: 'ps_2' } as never);
+    vi.mocked(prisma.sadRecord.findFirst as any).mockResolvedValue({ id: 'sad_2' });
 
     const app = buildApp();
     await inject(app, 'POST', '/api/provisioning/start', {

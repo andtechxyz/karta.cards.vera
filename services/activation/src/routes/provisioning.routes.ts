@@ -95,12 +95,30 @@ export function createProvisioningRouter(): Router {
       wsUrl = rcaBody.wsUrl;
     }
 
+    // Look up the SadRecord by proxyCardId so we can satisfy the FK at
+    // insert time.  The previous code passed sadRecordId='' which violated
+    // ProvisioningSession_sadRecordId_fkey on every call.
+    //
+    // Pick the most-recently-created READY record — there might be multiple
+    // historic ones from earlier register attempts; we want the live one.
+    const sadRecord = await prisma.sadRecord.findFirst({
+      where: { proxyCardId: card.proxyCardId, status: 'READY' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    if (!sadRecord) {
+      throw badRequest(
+        'sad_not_ready',
+        `No READY SAD record for proxyCardId ${card.proxyCardId} — re-stage via admin and retry.`,
+      );
+    }
+
     // Create local provisioning session
     await prisma.provisioningSession.create({
       data: {
         cardId: card.id,
-        sadRecordId: '', // Will be linked by RCA callback
-        proxyCardId: card.proxyCardId ?? '',
+        sadRecordId: sadRecord.id,
+        proxyCardId: card.proxyCardId,
         rcaSessionId: sessionId,
         phase: 'INIT',
       },
