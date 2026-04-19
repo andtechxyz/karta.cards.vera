@@ -10,7 +10,9 @@
  *
  * Flow:
  *   1. Load the Card + Program + IssuerProfile + ChipProfile.
- *   2. Use mock-mode EmvDerivationService (no AWS calls) for iCVV + KCVs.
+ *   2. EmvDerivationService with the `local` backend (real EMV Method A in
+ *      Node crypto, dev IMKs derived from DEV_UDK_ROOT_SEED via HKDF).  No
+ *      AWS calls; outputs are cryptographically valid but not HSM-protected.
  *   3. SADBuilder.buildSad(profile, chipProfile, cardData) → DGI list.
  *   4. SADBuilder.serialiseDgis(dgis) → flat plaintext bytes.
  *   5. encryptSadDev(bytes) → AES-128-ECB ciphertext under the static
@@ -47,10 +49,10 @@ import {
   SAD_KEY_VERSION_DEV_AES_ECB,
 } from '@vera/emv';
 import type { CardData, IssuerProfileForSad } from '@vera/emv';
-// The mock-mode EmvDerivationService is dependency-free (no AWS clients
-// constructed if mockMode=true is enforced at the callsite).  Importing it
-// from the service package keeps the iCVV derivation in lock-step with what
-// data-prep itself would produce for this card.
+// Local-backend EmvDerivationService is dependency-free (no AWS clients
+// constructed unless backend='hsm' at the callsite).  Importing it from the
+// service package keeps the iCVV derivation in lock-step with what data-prep
+// itself produces for this card on the 'local' backend.
 // Import from dist/ rather than src/ so the script is usable inside the
 // production runtime image (which only ships dist/), not just against a
 // local repo that's been `pnpm build`-ed.
@@ -241,10 +243,24 @@ async function main(): Promise<void> {
       mk_smc_dgi: chipProfileRow.mkSmcDgi,
     });
 
-    // Mock-mode EMV derivation — deterministic iCVV from PAN+expiry, no
-    // AWS calls.  Structurally valid; not cryptographically meaningful.
-    const emv = new EmvDerivationService('ap-southeast-2', /* mockMode */ true);
-    const icvv = await emv.deriveIcvv('unused-arn', pan, expiryYymm);
+    // Real EMV Method A under dev IMKs (no AWS calls).  Pulls
+    // DEV_UDK_ROOT_SEED from env so the derived iCVV + MKs match what the
+    // running data-prep service would produce on the `local` backend.
+    const rootSeed = process.env.DEV_UDK_ROOT_SEED;
+    if (!rootSeed) {
+      console.error(
+        'DEV_UDK_ROOT_SEED must be set (32-byte hex).  See .env.example.',
+      );
+      process.exit(1);
+    }
+    const emv = EmvDerivationService.fromBackend('local', {
+      localRootSeedHex: rootSeed,
+    });
+    const icvv = await emv.deriveIcvv(
+      issuerProfile.tmkKeyArn,
+      pan,
+      expiryYymm,
+    );
 
     const cardData: CardData = {
       pan,
