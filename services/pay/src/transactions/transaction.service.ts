@@ -9,7 +9,12 @@ import { normaliseCurrency, resolveRulesFromTokenisationProgram } from '@vera/pr
 import { evaluateTierRules } from './tier.js';
 import { assertTransition } from './state-machine.js';
 import { getPayConfig } from '../env.js';
-import { lookupCard } from '../cards/index.js';
+import {
+  incrementAtc,
+  listWebAuthnCredentials,
+  lookupCard,
+  type PalisadeClientOptions,
+} from '../cards/index.js';
 
 // Palisade's canonical card lifecycle — mirrored here so pay can enforce
 // "must be ACTIVATED" without reaching into Palisade's @prisma/client.  Kept
@@ -19,6 +24,16 @@ import { lookupCard } from '../cards/index.js';
 const CARD_STATUS_ACTIVATED = 'ACTIVATED';
 
 const rlidGen = customAlphabet('23456789abcdefghijkmnpqrstuvwxyz', 12);
+
+/** Build the Palisade client options from the resolved pay config. */
+function palisadeOpts(): PalisadeClientOptions {
+  const payConfig = getPayConfig();
+  return {
+    baseUrl: payConfig.PALISADE_BASE_URL,
+    keyId: 'pay',
+    secret: payConfig.SERVICE_AUTH_PALISADE_SECRET,
+  };
+}
 
 export interface CreateTxnInput {
   cardId: string;
@@ -35,11 +50,7 @@ export async function createTransaction(input: CreateTxnInput) {
   // Card state lives in Palisade (Vera owns vault + transactions, not cards).
   // lookupCard throws 404 notFound on unknown ids — we let that propagate.
   const payConfig = getPayConfig();
-  const card = await lookupCard(input.cardId, {
-    baseUrl: payConfig.PALISADE_BASE_URL,
-    keyId: 'pay',
-    secret: payConfig.SERVICE_AUTH_PALISADE_SECRET,
-  });
+  const card = await lookupCard(input.cardId, palisadeOpts());
   if (card.status !== CARD_STATUS_ACTIVATED) {
     throw badRequest('card_not_activated', `Card status is ${card.status}`);
   }
@@ -66,6 +77,22 @@ export async function createTransaction(input: CreateTxnInput) {
   const challenge = crypto.randomBytes(32).toString('base64url');
   const rlid = rlidGen();
 
+  // Resolve the VaultEntry id locally (the field is owned by Vera) so
+  // post-auth can mint a retrieval token without a second lookup.  The FK
+  // `Card.vaultEntryId` still lives in Vera's local Card table today — Phase
+  // 3 Step 3 drops the Card table and will need Palisade's lookupCard to
+  // return `vaultToken` (which IS vaultEntryId on the Vera side, see
+  // services/vault/src/routes/register.routes.ts).  Until then we read
+  // Vera's local copy to stamp Transaction.vaultEntryId.
+  //
+  // Nullable: admin-only dev cards that never ran the vault-register path
+  // have no VaultEntry, and post-auth still fails that flow with
+  // `card_not_vaulted` before minting a retrieval token.
+  const localCard = await prisma.card.findUnique({
+    where: { id: card.id },
+    select: { vaultEntryId: true },
+  });
+
   return prisma.transaction.create({
     data: {
       rlid,
@@ -79,6 +106,12 @@ export async function createTransaction(input: CreateTxnInput) {
       allowedCredentialKinds: decision.allowedKinds,
       challengeNonce: challenge,
       expiresAt,
+      // Denormalised from the Palisade card-lookup response.
+      cardRef: card.cardRef,
+      panLast4: card.panLast4,
+      panBin: card.panBin,
+      cardholderName: card.cardholderName,
+      vaultEntryId: localCard?.vaultEntryId ?? null,
     },
   });
 }
@@ -116,46 +149,57 @@ export async function updateStatus(
   return prisma.transaction.update({ where: { id }, data: patch });
 }
 
+/**
+ * Atomically bump the Palisade-side ATC for a card and return the new value.
+ * Pay used to `prisma.card.update` directly; in the post-split world the ATC
+ * lives in Palisade's Card row, so we PATCH the Palisade endpoint.
+ */
 export async function reserveAtc(cardId: string): Promise<number> {
-  const updated = await prisma.card.update({
-    where: { id: cardId },
-    data: { atc: { increment: 1 } },
-    select: { atc: true },
-  });
-  return updated.atc;
+  const result = await incrementAtc(cardId, palisadeOpts());
+  return result.atc;
 }
 
+/**
+ * Admin list view.  Reads the denormalised card display fields straight from
+ * the Transaction row — no Card join — so it stays a local query even after
+ * the Card table moves out of Vera in Phase 3 Step 3.
+ */
 export async function listTransactions(limit = 100) {
   return prisma.transaction.findMany({
     orderBy: { createdAt: 'desc' },
     take: Math.min(limit, 500),
-    include: {
-      card: {
-        select: {
-          id: true,
-          cardRef: true,
-          vaultEntry: { select: { panLast4: true } },
-        },
-      },
-    },
   });
 }
 
-export async function getTransactionCardSummary(rlid: string) {
+/**
+ * Shape returned to the customer-facing payment page.  Combines the locally
+ * denormalised card display with a Palisade call for the per-card credential
+ * kinds (so the SPA can decide whether to offer register vs. authenticate).
+ */
+export interface TransactionCardSummary {
+  id: string;
+  panLast4: string | null;
+  credentials: { kind: string }[];
+}
+
+export async function getTransactionCardSummary(
+  rlid: string,
+): Promise<TransactionCardSummary> {
   const txn = await prisma.transaction.findUnique({
     where: { rlid },
-    select: {
-      card: {
-        select: {
-          id: true,
-          vaultEntry: { select: { panLast4: true } },
-          credentials: { select: { kind: true } },
-        },
-      },
-    },
+    select: { cardId: true, panLast4: true },
   });
   if (!txn) throw notFound('transaction_not_found', 'Transaction not found');
-  return txn.card;
+
+  // Credential kinds still live in Palisade.  One HTTP call per page load
+  // (the SPA caches locally), and the list is always small (one or two).
+  const creds = await listWebAuthnCredentials(txn.cardId, palisadeOpts());
+
+  return {
+    id: txn.cardId,
+    panLast4: txn.panLast4,
+    credentials: creds.map((c) => ({ kind: c.kind })),
+  };
 }
 
 export async function getTransactionForAuthOrThrow(rlid: string) {

@@ -1,4 +1,4 @@
-import type { Transaction, Card, VaultEntry } from '@prisma/client';
+import type { Transaction } from '@prisma/client';
 
 // Client-facing projection of a Transaction row.  Centralised here because
 // both the REST endpoints (/api/transactions*) and the SSE `transaction_*`
@@ -30,12 +30,14 @@ export function toTransactionDto(txn: Transaction) {
 export type TransactionDto = ReturnType<typeof toTransactionDto>;
 
 /**
- * List DTO — omits challengeNonce (not needed in list context) and replaces
- * the internal cardId with the external cardRef + panLast4.
+ * List DTO — omits challengeNonce (not needed in list context) and exposes
+ * the denormalised display bits (cardRef + panLast4) directly off the
+ * Transaction row.  Pre-split this required a Transaction → Card → VaultEntry
+ * join; post-split the fields are stamped at create time in
+ * transaction.service.ts::createTransaction so the list query stays a
+ * single-table read.
  */
-export function toTransactionListDto(
-  txn: Transaction & { card: Pick<Card, 'cardRef'> & { vaultEntry: Pick<VaultEntry, 'panLast4'> | null } },
-) {
+export function toTransactionListDto(txn: Transaction) {
   return {
     id: txn.id,
     rlid: txn.rlid,
@@ -48,8 +50,8 @@ export function toTransactionListDto(
     merchantRef: txn.merchantRef,
     merchantName: txn.merchantName,
     expiresAt: txn.expiresAt,
-    cardRef: txn.card.cardRef,
-    panLast4: txn.card.vaultEntry?.panLast4 ?? null,
+    cardRef: txn.cardRef,
+    panLast4: txn.panLast4,
   };
 }
 

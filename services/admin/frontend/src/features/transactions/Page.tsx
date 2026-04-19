@@ -5,6 +5,12 @@ import { formatDate, formatMoney } from '../../utils/format';
 import { Table, type Column } from '../../components/Table';
 import { StatusChip, statusToneFor } from '../../components/StatusChip';
 
+// Matches the toTransactionListDto shape in
+// services/pay/src/transactions/serialize.ts.  Post Phase 3 denorm the card
+// display bits live directly on the Transaction row — no `card` sub-object
+// and no cross-repo join behind the list endpoint.  Both cardRef + panLast4
+// are nullable because existing rows from before the denorm migration have
+// NULLs (we don't backfill in dev).
 interface TxnRow {
   id: string;
   rlid: string;
@@ -21,7 +27,8 @@ interface TxnRow {
   completedAt: string | null;
   failedAt: string | null;
   failureReason: string | null;
-  card: { id: string; cardRef: string; vaultEntry: { panLast4: string } | null };
+  cardRef: string | null;
+  panLast4: string | null;
 }
 
 export function TransactionsPage() {
@@ -57,8 +64,9 @@ export function TransactionsPage() {
       header: 'Card',
       width: '14%',
       mono: true,
-      copyable: (t) => t.card.vaultEntry?.panLast4 ?? t.card.cardRef,
-      render: (t) => t.card.vaultEntry ? <>•••• {t.card.vaultEntry.panLast4}</> : t.card.cardRef,
+      copyable: (t) => t.panLast4 ?? t.cardRef ?? '',
+      render: (t) =>
+        t.panLast4 ? <>•••• {t.panLast4}</> : (t.cardRef ?? <span className="small">—</span>),
     },
     {
       key: 'provider',
@@ -90,8 +98,8 @@ export function TransactionsPage() {
         searchPlaceholder="Search RLID, card, or provider…"
         searchMatch={(t, q) =>
           t.rlid.toLowerCase().includes(q) ||
-          t.card.cardRef.toLowerCase().includes(q) ||
-          (t.card.vaultEntry?.panLast4.includes(q) ?? false) ||
+          (t.cardRef?.toLowerCase().includes(q) ?? false) ||
+          (t.panLast4?.includes(q) ?? false) ||
           (t.providerName?.toLowerCase().includes(q) ?? false) ||
           t.merchantName.toLowerCase().includes(q)
         }

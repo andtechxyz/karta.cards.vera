@@ -65,12 +65,18 @@ const findTxn = () =>
   vi.mocked((prisma.transaction as unknown as { findUniqueOrThrow: TxnFindMock }).findUniqueOrThrow);
 
 interface BuildTxnOverrides {
-  vaultEntry?: unknown;
   vaultEntryId?: string | null;
+  panBin?: string | null;
 }
 
+/**
+ * Transaction row as it now appears post-denorm: all the fields the
+ * orchestration reads live directly on the Transaction row.  No more
+ * `card.vaultEntry` join — see transaction.service.ts::createTransaction
+ * for the stamp site.
+ */
 function buildTxn(overrides: BuildTxnOverrides = {}) {
-  const base = {
+  return {
     id: 'txn_1',
     rlid: 'rl_happy',
     cardId: 'card_1',
@@ -79,17 +85,10 @@ function buildTxn(overrides: BuildTxnOverrides = {}) {
     merchantRef: 'order_1',
     challengeNonce: 'challenge_bytes_base64url',
     tier: 'TIER_1',
-    card: {
-      id: 'card_1',
-      vaultEntryId:
-        overrides.vaultEntryId === undefined ? 've_1' : overrides.vaultEntryId,
-      vaultEntry:
-        overrides.vaultEntry === undefined
-          ? { panBin: '424242' }
-          : overrides.vaultEntry,
-    },
+    vaultEntryId:
+      overrides.vaultEntryId === undefined ? 've_1' : overrides.vaultEntryId,
+    panBin: overrides.panBin === undefined ? '424242' : overrides.panBin,
   };
-  return base;
 }
 
 function buildProvider(behaviour: {
@@ -229,7 +228,7 @@ describe('orchestratePostAuth — happy path', () => {
 describe('orchestratePostAuth — failure branches', () => {
   it('throws 400 card_not_vaulted and publishes failed when card has no vault entry', async () => {
     findTxn()
-      .mockResolvedValue(buildTxn({ vaultEntry: null, vaultEntryId: null }));
+      .mockResolvedValue(buildTxn({ vaultEntryId: null, panBin: null }));
 
     await expect(
       orchestratePostAuth({ transactionId: 'txn_1', usedCredentialId: 'cred_1' }),
