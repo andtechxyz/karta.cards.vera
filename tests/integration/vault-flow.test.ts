@@ -23,11 +23,6 @@ const mockPrisma = vi.hoisted(() => ({
     findUnique: vi.fn(),
     findFirst: vi.fn(),
   },
-  card: {
-    findUnique: vi.fn(),
-    findMany: vi.fn(),
-    updateMany: vi.fn(),
-  },
   retrievalToken: {
     create: vi.fn(),
     findFirst: vi.fn(),
