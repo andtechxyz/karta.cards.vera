@@ -62,10 +62,15 @@ export async function handleRelayConnection(
     console.error(`[rca-ws] relay error: session=${sessionId}`, err);
   });
 
-  // Send initial ready message
+  // Send initial ready message — SELECT the Palisade Provisioning Agent
+  // applet by its instance AID.  `A00000006250414C` is the AID the JavaCard
+  // converter assigns when building from com.palisade.pa (package AID
+  // A0000000625041 + 1-byte module tag 0x4C).  Palisade's own reference
+  // perso installs `gp --install pa.cap` with no --create override, so the
+  // default module AID is the live instance AID we SELECT here.
   ws.send(JSON.stringify({
     type: 'apdu',
-    hex: '00A40400' + '08' + 'D276000085504100', // SELECT PA by AID
+    hex: '00A40400' + '08' + 'A00000006250414C', // SELECT PA by AID
     phase: 'select_pa',
     progress: 0.05,
   }));

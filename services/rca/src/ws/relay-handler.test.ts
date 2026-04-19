@@ -64,7 +64,7 @@ describe('handleRelayConnection', () => {
     expect(initial.type).toBe('apdu');
     expect(initial.phase).toBe('select_pa');
     expect(initial.hex).toContain('00A40400'); // SELECT command
-    expect(initial.hex).toContain('D276000085504100'); // PA AID
+    expect(initial.hex).toContain('A00000006250414C'); // PA AID (Palisade default)
   });
 
   it('parses incoming JSON messages and passes to SessionManager', async () => {
