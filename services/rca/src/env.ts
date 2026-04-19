@@ -20,6 +20,13 @@ const { get: getRcaConfig, reset: _resetRcaConfig } = defineEnv({
 
   // WebSocket reconnect timeout
   WS_TIMEOUT_SECONDS: z.coerce.number().default(30),
+
+  // Publicly-reachable origin the mobile app should connect its WebSocket to.
+  // RCA itself runs on an internal ALB; the WS endpoint is exposed via
+  // CloudFront → public ALB → vera-rca (path-routed under mobile.karta.cards
+  // /api/provision/*).  When unset, fall back to the inbound request host —
+  // OK for local dev, would hand the phone an unreachable URL in prod.
+  RCA_PUBLIC_WS_BASE: z.string().url().optional(),
 });
 
 export { getRcaConfig, _resetRcaConfig };
