@@ -374,7 +374,10 @@ export class SessionManager {
         failureReason: msg.code ?? 'APP_ERROR',
       },
     });
-    console.warn(`[rca] session error: ${sessionId} — ${msg.code}`);
+    console.warn(
+      `[rca] session error: ${sessionId} — ${msg.code}` +
+      (msg.message ? `: ${msg.message}` : ''),
+    );
   }
 
   /**
