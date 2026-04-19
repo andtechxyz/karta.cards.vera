@@ -69,22 +69,6 @@ export interface CreateCredInput {
   deviceName?: string | null;
 }
 
-export interface RegistrationChallenge {
-  id: string;
-  challenge: string;
-  cardId: string;
-  kind: 'PLATFORM' | 'CROSS_PLATFORM';
-  expiresAt: Date;
-  createdAt: Date;
-}
-
-export interface CreateChallengeInput {
-  challenge: string;
-  cardId: string;
-  kind: 'PLATFORM' | 'CROSS_PLATFORM';
-  expiresAt: Date;
-}
-
 export interface PalisadeClientOptions {
   baseUrl: string;
   keyId: string;
@@ -242,26 +226,6 @@ function parseCredential(wire: WireCredential): WebAuthnCredential {
   };
 }
 
-interface WireChallenge {
-  id: string;
-  challenge: string;
-  cardId: string;
-  kind: 'PLATFORM' | 'CROSS_PLATFORM';
-  expiresAt: string;
-  createdAt: string;
-}
-
-function parseChallenge(wire: WireChallenge): RegistrationChallenge {
-  return {
-    id: wire.id,
-    challenge: wire.challenge,
-    cardId: wire.cardId,
-    kind: wire.kind,
-    expiresAt: new Date(wire.expiresAt),
-    createdAt: new Date(wire.createdAt),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -391,70 +355,3 @@ export async function updateWebAuthnCredentialCounter(
   return { signCounter: wire.signCounter, lastUsedAt: new Date(wire.lastUsedAt) };
 }
 
-/**
- * Persist a one-shot registration challenge.  Replaces pay's previous
- * `prisma.registrationChallenge.create`.
- */
-export async function createRegistrationChallenge(
-  input: CreateChallengeInput,
-  opts: PalisadeClientOptions,
-): Promise<RegistrationChallenge> {
-  const wire = await sendSigned<WireChallenge>({
-    method: 'POST',
-    pathAndQuery: `/api/registration-challenges`,
-    body: {
-      challenge: input.challenge,
-      cardId: input.cardId,
-      kind: input.kind,
-      expiresAt: input.expiresAt.toISOString(),
-    },
-    opts,
-  });
-  return parseChallenge(wire);
-}
-
-/**
- * Look up a registration challenge by its id.  Pay passes the server-issued
- * `challenge` string (extracted from clientDataJSON) as the id; Palisade's
- * registrationChallenge rows use that string as the primary lookup key
- * (unique in the old Vera schema, same semantics preserved on the Palisade
- * side).  Returns null on 404 so callers can raise their own
- * `unauthorized('bad_challenge', ...)` — matching the shape of the old
- * prisma.registrationChallenge.findUnique call.
- */
-export async function getRegistrationChallenge(
-  id: string,
-  opts: PalisadeClientOptions,
-): Promise<RegistrationChallenge | null> {
-  if (!id) {
-    throw badRequest('invalid_challenge_id', 'id is required');
-  }
-  const wire = await sendSigned<WireChallenge | null>({
-    method: 'GET',
-    pathAndQuery: `/api/registration-challenges/${encodeURIComponent(id)}`,
-    opts,
-    allow404: true,
-  });
-  return wire ? parseChallenge(wire) : null;
-}
-
-/**
- * Delete a registration challenge (single-use consumption).  Called after
- * finishRegistration successfully verifies the challenge.  Returns void on
- * 2xx; 404 is fine — a challenge racing the sweeper is already gone.
- */
-export async function deleteRegistrationChallenge(
-  id: string,
-  opts: PalisadeClientOptions,
-): Promise<void> {
-  if (!id) {
-    throw badRequest('invalid_challenge_id', 'id is required');
-  }
-  await sendSigned<void>({
-    method: 'DELETE',
-    pathAndQuery: `/api/registration-challenges/${encodeURIComponent(id)}`,
-    opts,
-    allow404: true,
-    expectEmpty: true,
-  });
-}

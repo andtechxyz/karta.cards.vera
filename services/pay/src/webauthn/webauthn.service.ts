@@ -10,6 +10,7 @@ import type {
   RegistrationResponseJSON,
 } from '@simplewebauthn/types';
 import { CredentialKind } from '@prisma/client';
+import { prisma } from '@vera/db';
 import { badRequest, notFound, unauthorized } from '@vera/core';
 import {
   buildAuthenticationOptions,
@@ -19,10 +20,7 @@ import {
   verifyAuthentication,
 } from '@vera/webauthn';
 import {
-  createRegistrationChallenge,
   createWebAuthnCredential,
-  deleteRegistrationChallenge,
-  getRegistrationChallenge,
   getWebAuthnCredentialByCredentialId,
   listWebAuthnCredentials,
   lookupCard,
@@ -35,10 +33,13 @@ import { getPayConfig } from '../env.js';
 // -----------------------------------------------------------------------------
 // Pay service WebAuthn service — registration (for admin/dev path) + auth.
 //
-// After the Vera/Palisade split, all WebAuthn credential rows and registration
-// challenges live in Palisade's DB, alongside the Card they authenticate.  Pay
-// no longer reads those tables directly; instead it calls Palisade's
-// cross-repo HTTP endpoints via services/pay/src/cards/palisade-client.ts.
+// Post Vera/Palisade split:
+//   - WebAuthnCredential rows live in Palisade (Card-adjacent).  Pay
+//     accesses them over HTTP via services/pay/src/cards/palisade-client.ts.
+//   - RegistrationChallenge rows stay on Vera's local DB — they're a
+//     per-pay-request nonce that never leaves the pay transaction flow, so
+//     there's no benefit to a cross-repo round-trip.  Pay reads them via
+//     local `prisma.registrationChallenge.*`.
 // -----------------------------------------------------------------------------
 
 /**
@@ -89,15 +90,14 @@ export async function beginRegistration(
   const options = await generateRegistrationOptions(builderOpts);
 
   const ttlMs = 5 * 60 * 1000;
-  await createRegistrationChallenge(
-    {
+  await prisma.registrationChallenge.create({
+    data: {
       challenge: options.challenge,
       cardId: card.id,
       kind: input.kind,
       expiresAt: new Date(Date.now() + ttlMs),
     },
-    opts,
-  );
+  });
 
   return options;
 }
@@ -121,7 +121,9 @@ export async function finishRegistration(input: FinishRegistrationInput) {
     throw badRequest('missing_challenge', 'Response is missing clientDataJSON.challenge');
   }
 
-  const challengeRow = await getRegistrationChallenge(expectedChallenge, opts);
+  const challengeRow = await prisma.registrationChallenge.findUnique({
+    where: { challenge: expectedChallenge },
+  });
   if (!challengeRow || challengeRow.cardId !== input.cardId) {
     throw unauthorized('bad_challenge', 'Registration challenge not found or mismatched');
   }
@@ -161,9 +163,16 @@ export async function finishRegistration(input: FinishRegistrationInput) {
     opts,
   );
 
-  // Consume the single-use challenge.  The Palisade DELETE swallows a 404 in
-  // case the sweeper raced us — either way the challenge is gone.
-  await deleteRegistrationChallenge(challengeRow.challenge, opts);
+  // Consume the single-use challenge.  Swallow P2025 (row not found) in case
+  // a retention sweeper raced us — either way the challenge is gone.
+  try {
+    await prisma.registrationChallenge.delete({
+      where: { challenge: challengeRow.challenge },
+    });
+  } catch (err: unknown) {
+    const code = (err as { code?: string }).code;
+    if (code !== 'P2025') throw err;
+  }
 
   return credential;
 }

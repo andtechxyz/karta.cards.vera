@@ -2,10 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CredentialKind } from '@vera/db';
 
 // ---------------------------------------------------------------------------
-// After the Vera/Palisade split the webauthn service reads credentials +
-// challenges over HTTP against Palisade.  These tests mock the palisade-client
-// module instead of prisma; the shape tests are end-to-end at the service
-// boundary (input → HTTP call set + return value).
+// Post-split wiring:
+//   - WebAuthn credentials live on Palisade → mock palisade-client.
+//   - Registration challenges live on Vera's local DB → mock prisma.
 // ---------------------------------------------------------------------------
 
 vi.mock('../cards/index.js', () => ({
@@ -14,10 +13,21 @@ vi.mock('../cards/index.js', () => ({
   getWebAuthnCredentialByCredentialId: vi.fn(),
   createWebAuthnCredential: vi.fn(),
   updateWebAuthnCredentialCounter: vi.fn(),
-  createRegistrationChallenge: vi.fn(),
-  getRegistrationChallenge: vi.fn(),
-  deleteRegistrationChallenge: vi.fn(),
 }));
+
+vi.mock('@vera/db', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    prisma: {
+      registrationChallenge: {
+        create: vi.fn(),
+        findUnique: vi.fn(),
+        delete: vi.fn(),
+      },
+    },
+  };
+});
 
 // The SimpleWebAuthn helpers are mocked too — a real ceremony would require
 // fresh attestation material per test.  We care that the service threads the
@@ -47,10 +57,8 @@ import {
   getWebAuthnCredentialByCredentialId,
   createWebAuthnCredential,
   updateWebAuthnCredentialCounter,
-  createRegistrationChallenge,
-  getRegistrationChallenge,
-  deleteRegistrationChallenge,
 } from '../cards/index.js';
+import { prisma } from '@vera/db';
 import {
   generateRegistrationOptions,
   generateAuthenticationOptions,
@@ -80,9 +88,9 @@ beforeEach(() => {
   vi.mocked(m(getWebAuthnCredentialByCredentialId)).mockReset();
   vi.mocked(m(createWebAuthnCredential)).mockReset();
   vi.mocked(m(updateWebAuthnCredentialCounter)).mockReset();
-  vi.mocked(m(createRegistrationChallenge)).mockReset();
-  vi.mocked(m(getRegistrationChallenge)).mockReset();
-  vi.mocked(m(deleteRegistrationChallenge)).mockReset();
+  (prisma.registrationChallenge.create as ReturnType<typeof vi.fn>).mockReset();
+  (prisma.registrationChallenge.findUnique as ReturnType<typeof vi.fn>).mockReset();
+  (prisma.registrationChallenge.delete as ReturnType<typeof vi.fn>).mockReset();
   vi.mocked(m(generateRegistrationOptions)).mockReset();
   vi.mocked(m(generateAuthenticationOptions)).mockReset();
   vi.mocked(m(verifyRegistration)).mockReset();
@@ -145,15 +153,16 @@ describe('beginRegistration', () => {
     };
     expect(genCall.excludeCredentialIds).toEqual(['cred_nfc_1']);
 
-    expect(createRegistrationChallenge).toHaveBeenCalledOnce();
-    const [challengePayload] = vi.mocked(m(createRegistrationChallenge)).mock.calls[0]!;
-    expect(challengePayload).toMatchObject({
+    expect(prisma.registrationChallenge.create).toHaveBeenCalledOnce();
+    const createArg = (prisma.registrationChallenge.create as ReturnType<typeof vi.fn>)
+      .mock.calls[0]![0] as { data: { challenge: string; cardId: string; kind: string; expiresAt: Date } };
+    expect(createArg.data).toMatchObject({
       challenge: 'chal_bytes',
       cardId: 'card_1',
       kind: CredentialKind.CROSS_PLATFORM,
     });
-    expect(challengePayload.expiresAt).toBeInstanceOf(Date);
-    expect(challengePayload.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    expect(createArg.data.expiresAt).toBeInstanceOf(Date);
+    expect(createArg.data.expiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 
   it('throws 404 card_not_found when Palisade lookupCard rejects with notFound', async () => {
@@ -167,7 +176,7 @@ describe('beginRegistration', () => {
       beginRegistration({ cardId: 'missing', kind: CredentialKind.PLATFORM }),
     ).rejects.toMatchObject({ status: 404, code: 'card_not_found' });
 
-    expect(createRegistrationChallenge).not.toHaveBeenCalled();
+    expect(prisma.registrationChallenge.create).not.toHaveBeenCalled();
   });
 });
 
@@ -184,7 +193,7 @@ function clientDataWith(challenge: string) {
 describe('finishRegistration', () => {
   it('validates challenge, verifies, creates credential, and deletes the challenge', async () => {
     const challengeValue = 'chal_live';
-    vi.mocked(m(getRegistrationChallenge)).mockResolvedValue({
+    (prisma.registrationChallenge.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: 'chall_1',
       challenge: challengeValue,
       cardId: 'card_1',
@@ -213,7 +222,7 @@ describe('finishRegistration', () => {
       createdAt: new Date(),
       lastUsedAt: null,
     } as never);
-    vi.mocked(m(deleteRegistrationChallenge)).mockResolvedValue(undefined as never);
+    (prisma.registrationChallenge.delete as ReturnType<typeof vi.fn>).mockResolvedValue(undefined as never);
 
     const result = await finishRegistration({
       cardId: 'card_1',
@@ -234,7 +243,7 @@ describe('finishRegistration', () => {
     expect(result.credentialId).toBe('new_cred_id');
 
     // Verified the challenge by its exact string — not by an id lookup.
-    expect(getRegistrationChallenge).toHaveBeenCalledWith(challengeValue, expect.any(Object));
+    expect(prisma.registrationChallenge.findUnique).toHaveBeenCalledWith({ where: { challenge: challengeValue } });
 
     // Credential creation echoed the cardId, the verified pubkey, and transports.
     const createCall = vi.mocked(m(createWebAuthnCredential)).mock.calls[0]!;
@@ -247,10 +256,9 @@ describe('finishRegistration', () => {
     });
 
     // Single-use consumption happens AFTER a successful create.
-    expect(deleteRegistrationChallenge).toHaveBeenCalledWith(
-      challengeValue,
-      expect.any(Object),
-    );
+    expect(prisma.registrationChallenge.delete).toHaveBeenCalledWith({
+      where: { challenge: challengeValue },
+    });
   });
 
   it('throws 400 missing_challenge when clientDataJSON has no challenge', async () => {
@@ -272,7 +280,7 @@ describe('finishRegistration', () => {
   });
 
   it('throws 401 bad_challenge when Palisade has no matching challenge', async () => {
-    vi.mocked(m(getRegistrationChallenge)).mockResolvedValue(null);
+    (prisma.registrationChallenge.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
     await expect(
       finishRegistration({
@@ -291,11 +299,11 @@ describe('finishRegistration', () => {
     ).rejects.toMatchObject({ status: 401, code: 'bad_challenge' });
 
     expect(createWebAuthnCredential).not.toHaveBeenCalled();
-    expect(deleteRegistrationChallenge).not.toHaveBeenCalled();
+    expect(prisma.registrationChallenge.delete).not.toHaveBeenCalled();
   });
 
   it('throws 401 bad_challenge when challenge belongs to a different card', async () => {
-    vi.mocked(m(getRegistrationChallenge)).mockResolvedValue({
+    (prisma.registrationChallenge.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: 'chall_1',
       challenge: 'chal_value',
       cardId: 'someone_else',
@@ -322,7 +330,7 @@ describe('finishRegistration', () => {
   });
 
   it('throws 401 challenge_expired when the challenge is past expiry', async () => {
-    vi.mocked(m(getRegistrationChallenge)).mockResolvedValue({
+    (prisma.registrationChallenge.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: 'chall_1',
       challenge: 'chal_value',
       cardId: 'card_1',
@@ -349,7 +357,7 @@ describe('finishRegistration', () => {
   });
 
   it('throws 401 registration_verify_failed when verifyRegistration returns verified=false', async () => {
-    vi.mocked(m(getRegistrationChallenge)).mockResolvedValue({
+    (prisma.registrationChallenge.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: 'chall_1',
       challenge: 'chal_value',
       cardId: 'card_1',

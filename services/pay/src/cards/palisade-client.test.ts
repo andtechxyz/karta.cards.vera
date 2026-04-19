@@ -16,9 +16,6 @@ import {
   getWebAuthnCredentialByCredentialId,
   createWebAuthnCredential,
   updateWebAuthnCredentialCounter,
-  createRegistrationChallenge,
-  getRegistrationChallenge,
-  deleteRegistrationChallenge,
   PalisadeClientError,
 } from './palisade-client.js';
 import { verifyRequest } from '@vera/service-auth';
@@ -43,13 +40,6 @@ function errorResponse(body: unknown, statusCode: number) {
   return {
     statusCode,
     body: { text: async () => JSON.stringify(body) },
-  } as never;
-}
-
-function emptyResponse(statusCode = 204) {
-  return {
-    statusCode,
-    body: { text: async () => '' },
   } as never;
 }
 
@@ -430,130 +420,3 @@ describe('updateWebAuthnCredentialCounter', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// createRegistrationChallenge
-// ---------------------------------------------------------------------------
-
-describe('createRegistrationChallenge', () => {
-  it('POSTs a challenge record with ISO-formatted expiresAt', async () => {
-    const expiresAt = new Date('2026-04-19T00:05:00.000Z');
-    vi.mocked(req()).mockResolvedValue(
-      okResponse({
-        id: 'chall_1',
-        challenge: 'chal_bytes',
-        cardId: 'card_1',
-        kind: 'PLATFORM',
-        expiresAt: expiresAt.toISOString(),
-        createdAt: '2026-04-19T00:00:00.000Z',
-      }),
-    );
-
-    const out = await createRegistrationChallenge(
-      { challenge: 'chal_bytes', cardId: 'card_1', kind: 'PLATFORM', expiresAt },
-      OPTS,
-    );
-    expect(out.expiresAt).toBeInstanceOf(Date);
-    expect(out.expiresAt.toISOString()).toBe('2026-04-19T00:05:00.000Z');
-
-    const [url, init] = vi.mocked(req()).mock.calls[0]! as unknown as [
-      string,
-      { method: string; headers: Record<string, string>; body: Buffer },
-    ];
-    expect(init.method).toBe('POST');
-
-    const sent = JSON.parse(init.body.toString('utf8'));
-    expect(sent).toEqual({
-      challenge: 'chal_bytes',
-      cardId: 'card_1',
-      kind: 'PLATFORM',
-      expiresAt: '2026-04-19T00:05:00.000Z',
-    });
-
-    verifySignedCall({
-      url,
-      method: 'POST',
-      expectedUrl: 'http://localhost:3002/api/registration-challenges',
-      expectedPath: '/api/registration-challenges',
-      body: init.body,
-      headers: init.headers,
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// getRegistrationChallenge
-// ---------------------------------------------------------------------------
-
-describe('getRegistrationChallenge', () => {
-  it('GETs a challenge by id and inflates dates', async () => {
-    vi.mocked(req()).mockResolvedValue(
-      okResponse({
-        id: 'chall_1',
-        challenge: 'chal_bytes',
-        cardId: 'card_1',
-        kind: 'PLATFORM',
-        expiresAt: '2026-04-19T00:05:00.000Z',
-        createdAt: '2026-04-19T00:00:00.000Z',
-      }),
-    );
-
-    const out = await getRegistrationChallenge('chal_bytes', OPTS);
-    expect(out).not.toBeNull();
-    expect(out!.challenge).toBe('chal_bytes');
-    expect(out!.expiresAt).toBeInstanceOf(Date);
-
-    const [url, init] = vi.mocked(req()).mock.calls[0]! as unknown as [
-      string,
-      { method: string; headers: Record<string, string> },
-    ];
-    verifySignedCall({
-      url,
-      method: 'GET',
-      expectedUrl: 'http://localhost:3002/api/registration-challenges/chal_bytes',
-      expectedPath: '/api/registration-challenges/chal_bytes',
-      headers: init.headers,
-    });
-  });
-
-  it('returns null when Palisade responds 404', async () => {
-    vi.mocked(req()).mockResolvedValue(
-      errorResponse({ error: { code: 'challenge_not_found' } }, 404),
-    );
-
-    const out = await getRegistrationChallenge('missing', OPTS);
-    expect(out).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// deleteRegistrationChallenge
-// ---------------------------------------------------------------------------
-
-describe('deleteRegistrationChallenge', () => {
-  it('DELETEs the challenge and resolves on 204', async () => {
-    vi.mocked(req()).mockResolvedValue(emptyResponse(204));
-
-    await expect(deleteRegistrationChallenge('chal_bytes', OPTS)).resolves.toBeUndefined();
-
-    const [url, init] = vi.mocked(req()).mock.calls[0]! as unknown as [
-      string,
-      { method: string; headers: Record<string, string> },
-    ];
-    expect(init.method).toBe('DELETE');
-    verifySignedCall({
-      url,
-      method: 'DELETE',
-      expectedUrl: 'http://localhost:3002/api/registration-challenges/chal_bytes',
-      expectedPath: '/api/registration-challenges/chal_bytes',
-      headers: init.headers,
-    });
-  });
-
-  it('silently swallows a 404 (race with sweeper)', async () => {
-    vi.mocked(req()).mockResolvedValue(
-      errorResponse({ error: { code: 'challenge_not_found' } }, 404),
-    );
-
-    await expect(deleteRegistrationChallenge('missing', OPTS)).resolves.toBeUndefined();
-  });
-});
