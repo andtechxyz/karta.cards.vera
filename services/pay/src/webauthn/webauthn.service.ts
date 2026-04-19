@@ -10,7 +10,6 @@ import type {
   RegistrationResponseJSON,
 } from '@simplewebauthn/types';
 import { CredentialKind } from '@prisma/client';
-import { prisma } from '@vera/db';
 import { badRequest, notFound, unauthorized } from '@vera/core';
 import {
   buildAuthenticationOptions,
@@ -19,8 +18,41 @@ import {
   verifyRegistration,
   verifyAuthentication,
 } from '@vera/webauthn';
+import {
+  createRegistrationChallenge,
+  createWebAuthnCredential,
+  deleteRegistrationChallenge,
+  getRegistrationChallenge,
+  getWebAuthnCredentialByCredentialId,
+  listWebAuthnCredentials,
+  lookupCard,
+  updateWebAuthnCredentialCounter,
+  type PalisadeClientOptions,
+  type WebAuthnCredential,
+} from '../cards/index.js';
+import { getPayConfig } from '../env.js';
 
+// -----------------------------------------------------------------------------
 // Pay service WebAuthn service — registration (for admin/dev path) + auth.
+//
+// After the Vera/Palisade split, all WebAuthn credential rows and registration
+// challenges live in Palisade's DB, alongside the Card they authenticate.  Pay
+// no longer reads those tables directly; instead it calls Palisade's
+// cross-repo HTTP endpoints via services/pay/src/cards/palisade-client.ts.
+// -----------------------------------------------------------------------------
+
+/**
+ * Pay's Palisade credentials, resolved once per request from config.  Shared
+ * helper so every webauthn operation uses the same baseUrl + HMAC key.
+ */
+function palisadeOpts(): PalisadeClientOptions {
+  const cfg = getPayConfig();
+  return {
+    baseUrl: cfg.PALISADE_BASE_URL,
+    keyId: 'pay',
+    secret: cfg.SERVICE_AUTH_PALISADE_SECRET,
+  };
+}
 
 export interface BeginRegistrationInput {
   cardId: string;
@@ -30,13 +62,18 @@ export interface BeginRegistrationInput {
 export async function beginRegistration(
   input: BeginRegistrationInput,
 ): Promise<PublicKeyCredentialCreationOptionsJSON> {
-  const card = await prisma.card.findUnique({
-    where: { id: input.cardId },
-    include: { credentials: { select: { credentialId: true, kind: true } } },
-  });
-  if (!card) throw notFound('card_not_found', 'Card not found');
+  const opts = palisadeOpts();
 
-  const excludeCredentialIds = card.credentials
+  // Confirm the card exists (Palisade is the source of truth now).  lookupCard
+  // throws notFound('card_not_found') on 404, which we let propagate — same
+  // 404 the previous prisma.card.findUnique miss produced.
+  const card = await lookupCard(input.cardId, opts);
+
+  // excludeCredentialIds comes from the already-registered same-kind credentials
+  // on Palisade.  We ask Palisade for the full list and filter locally — the
+  // list is always small (one or two credentials per card).
+  const existing = await listWebAuthnCredentials(card.id, opts);
+  const excludeCredentialIds = existing
     .filter((c) => c.kind === input.kind)
     .map((c) => c.credentialId);
 
@@ -45,21 +82,22 @@ export async function beginRegistration(
     userLabel: `card_${card.id.slice(0, 8)}`,
     excludeCredentialIds,
   };
-  const opts =
+  const builderOpts =
     input.kind === CredentialKind.CROSS_PLATFORM
       ? buildNfcCardRegistrationOptions(builderInput)
       : buildPlatformRegistrationOptions(builderInput);
-  const options = await generateRegistrationOptions(opts);
+  const options = await generateRegistrationOptions(builderOpts);
 
   const ttlMs = 5 * 60 * 1000;
-  await prisma.registrationChallenge.create({
-    data: {
+  await createRegistrationChallenge(
+    {
       challenge: options.challenge,
       cardId: card.id,
       kind: input.kind,
       expiresAt: new Date(Date.now() + ttlMs),
     },
-  });
+    opts,
+  );
 
   return options;
 }
@@ -71,6 +109,8 @@ export interface FinishRegistrationInput {
 }
 
 export async function finishRegistration(input: FinishRegistrationInput) {
+  const opts = palisadeOpts();
+
   const expectedChallenge = input.response.response?.clientDataJSON
     ? JSON.parse(
         Buffer.from(input.response.response.clientDataJSON, 'base64url').toString('utf8'),
@@ -81,9 +121,7 @@ export async function finishRegistration(input: FinishRegistrationInput) {
     throw badRequest('missing_challenge', 'Response is missing clientDataJSON.challenge');
   }
 
-  const challengeRow = await prisma.registrationChallenge.findUnique({
-    where: { challenge: expectedChallenge },
-  });
+  const challengeRow = await getRegistrationChallenge(expectedChallenge, opts);
   if (!challengeRow || challengeRow.cardId !== input.cardId) {
     throw unauthorized('bad_challenge', 'Registration challenge not found or mismatched');
   }
@@ -110,19 +148,22 @@ export async function finishRegistration(input: FinishRegistrationInput) {
       ? ['nfc']
       : ['internal', 'hybrid']);
 
-  const credential = await prisma.webAuthnCredential.create({
-    data: {
+  const credential = await createWebAuthnCredential(
+    input.cardId,
+    {
       credentialId,
       publicKey,
       counter: BigInt(info.counter),
       kind: challengeRow.kind,
       transports,
       deviceName: input.deviceName,
-      cardId: input.cardId,
     },
-  });
+    opts,
+  );
 
-  await prisma.registrationChallenge.delete({ where: { id: challengeRow.id } });
+  // Consume the single-use challenge.  The Palisade DELETE swallows a 404 in
+  // case the sweeper raced us — either way the challenge is gone.
+  await deleteRegistrationChallenge(challengeRow.challenge, opts);
 
   return credential;
 }
@@ -136,26 +177,26 @@ export interface BeginAuthenticationInput {
 export async function beginAuthentication(
   input: BeginAuthenticationInput,
 ): Promise<PublicKeyCredentialRequestOptionsJSON> {
-  const creds = await prisma.webAuthnCredential.findMany({
-    where: {
-      cardId: input.cardId,
-      ...(input.kinds && { kind: { in: input.kinds } }),
-    },
-  });
+  const opts = palisadeOpts();
+
+  const all = await listWebAuthnCredentials(input.cardId, opts);
+  const creds = input.kinds
+    ? all.filter((c) => input.kinds!.includes(c.kind as CredentialKind))
+    : all;
   if (creds.length === 0) {
     throw notFound('no_credentials', 'No WebAuthn credentials registered for this card');
   }
 
-  const opts = buildAuthenticationOptions({
-    credentials: creds.map((c) => ({
+  const builderOpts = buildAuthenticationOptions({
+    credentials: creds.map((c: WebAuthnCredential) => ({
       id: c.credentialId,
-      kind: c.kind,
+      kind: c.kind as CredentialKind,
       transports: c.transports,
     })),
   });
 
   const options = await generateAuthenticationOptions({
-    ...opts,
+    ...builderOpts,
     challenge: Buffer.from(input.challenge, 'base64url'),
   });
 
@@ -178,15 +219,18 @@ export interface FinishAuthenticationResult {
 export async function finishAuthentication(
   input: FinishAuthenticationInput,
 ): Promise<FinishAuthenticationResult> {
+  const opts = palisadeOpts();
+
   const rawCredId = input.response.id;
-  const credential = await prisma.webAuthnCredential.findUnique({
-    where: { credentialId: rawCredId },
-  });
+  const credential = await getWebAuthnCredentialByCredentialId(rawCredId, opts);
   if (!credential) {
     throw notFound('credential_not_found', 'Credential not recognised');
   }
 
-  if (input.allowedKinds && !input.allowedKinds.includes(credential.kind)) {
+  if (
+    input.allowedKinds &&
+    !input.allowedKinds.includes(credential.kind as CredentialKind)
+  ) {
     throw unauthorized(
       'credential_kind_not_allowed',
       `Credential kind ${credential.kind} is not acceptable for this transaction`,
@@ -210,15 +254,18 @@ export async function finishAuthentication(
   }
 
   const newCounter = BigInt(verification.authenticationInfo.newCounter);
-  await prisma.webAuthnCredential.update({
-    where: { id: credential.id },
-    data: { counter: newCounter, lastUsedAt: new Date() },
-  });
+  // Palisade stores counter as Int; the authenticator bumps it by 1 so it
+  // comfortably fits a JS number even for very active credentials.
+  await updateWebAuthnCredentialCounter(
+    credential.credentialId,
+    Number(newCounter),
+    opts,
+  );
 
   return {
     credentialId: credential.credentialId,
     cardId: credential.cardId,
-    kind: credential.kind,
+    kind: credential.kind as CredentialKind,
     newCounter,
   };
 }
