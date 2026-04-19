@@ -63,6 +63,7 @@ export async function beginActivationRegistration(
       keyVersion: true,
       program: {
         select: {
+          urlCode: true,
           preActivationNdefUrlTemplate: true,
           postActivationNdefUrlTemplate: true,
         },
@@ -95,6 +96,7 @@ export async function beginActivationRegistration(
     // `?e=.&m=.` query (the chip appends that itself on every tap).
     const { postActivation: postActivationUrl } = renderNdefUrls({
       cardRef: card.cardRef,
+      urlCode: card.program?.urlCode ?? null,
       preActivationTemplate: card.program?.preActivationNdefUrlTemplate ?? null,
       postActivationTemplate: card.program?.postActivationNdefUrlTemplate ?? null,
     });

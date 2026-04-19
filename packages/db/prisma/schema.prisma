@@ -250,8 +250,13 @@ model Program {
   //                                  taps route to the payment-initiation
   //                                  flow instead of activation.
   //
-  // Templates may contain two classes of placeholder:
+  // Templates may contain three classes of placeholder:
   //   {cardRef}  — substituted server-side by Vera (stable per-card slug)
+  //   {urlCode}  — substituted server-side by Vera (this program's `urlCode`)
+  //                used by the post-activation `mobile.karta.cards/t/<code>`
+  //                URL shape so the mobile app + tap-verify endpoint can
+  //                pick the right per-program key set without leaking
+  //                cardRef in the URL.
   //   {PICCData}, {CMAC} — literal markers the NXP SDM engine substitutes
   //                        on-card at tap time; Vera passes them through
   //                        verbatim.
@@ -260,6 +265,15 @@ model Program {
   // callers fall back to Vera-wide defaults via config.
   preActivationNdefUrlTemplate  String?
   postActivationNdefUrlTemplate String?
+
+  // Short opaque program identifier baked into post-activation chip URLs
+  // (https://mobile.karta.cards/t/<urlCode>?e=&m=).  Lets the mobile app +
+  // tap-verify endpoint resolve which program's per-card SDM keys to try
+  // without having {cardRef} in the URL.  Public — same leak surface as the
+  // PAN BIN.  Globally unique so the URL fully identifies the program.
+  // 2–8 chars, [a-z0-9] only.  Nullable for legacy programs created before
+  // this column existed; new programs MUST set it.
+  urlCode String? @unique @db.VarChar(8)
 
   // --- Microsite ---------------------------------------------------------
   // Per-program static website served from S3+CloudFront.  When enabled,
