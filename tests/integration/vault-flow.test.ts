@@ -55,9 +55,6 @@ vi.mock('../../services/vault/src/vault/store.service.js', () => ({
     panLast4: '4242',
     deduped: false,
   }),
-  listCards: vi.fn().mockResolvedValue([
-    { id: 'card-1', cardRef: 'ref-1', panLast4: '4242' },
-  ]),
   getCardMetadata: vi.fn(),
 }));
 
@@ -114,7 +111,6 @@ import { errorMiddleware } from '@vera/core';
 import storeRouter from '../../services/vault/src/routes/store.routes.js';
 import registerRouter from '../../services/vault/src/routes/register.routes.js';
 import tokensRouter from '../../services/vault/src/routes/tokens.routes.js';
-import cardsRouter from '../../services/vault/src/routes/cards.routes.js';
 import auditRouter from '../../services/vault/src/routes/audit.routes.js';
 
 function buildApp(): Express {
@@ -131,7 +127,6 @@ function buildApp(): Express {
   vaultRouter.use(storeRouter);
   vaultRouter.use(registerRouter);
   vaultRouter.use(tokensRouter);
-  vaultRouter.use(cardsRouter);
   vaultRouter.use(auditRouter);
   app.use('/api/vault', vaultRouter);
 
@@ -297,38 +292,6 @@ describe('Vault service — integration', () => {
       expect(res.body).toHaveProperty('card');
       expect(res.body.card).toHaveProperty('pan');
       expect(res.body.card).toHaveProperty('last4');
-    });
-  });
-
-  // ---- Cards ----
-  describe('GET /api/vault/cards', () => {
-    const cardsPath = '/api/vault/cards';
-
-    it('returns 200 array with valid HMAC', async () => {
-      // cards.routes.ts calls prisma.card.findMany directly
-      mockPrisma.card.findMany.mockResolvedValue([
-        {
-          id: 'card-1',
-          cardRef: 'ref-1',
-          status: 'ACTIVATED',
-          chipSerial: null,
-          programId: null,
-          program: null,
-          batchId: null,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          vaultEntry: { id: 've-1', panLast4: '4242', panBin: '424242', cardholderName: 'Test' },
-          credentials: [],
-          activationSessions: [],
-        },
-      ]);
-
-      const headers = signedHeaders('GET', cardsPath);
-      const res = await request(app)
-        .get(cardsPath)
-        .set(headers);
-      expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
     });
   });
 

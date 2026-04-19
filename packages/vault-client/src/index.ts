@@ -174,29 +174,6 @@ function vaultGet<T>(
 
 // --- List endpoints (admin-only, read-only) ---------------------------------
 
-export interface ListCardRow {
-  id: string;
-  cardRef: string;
-  status: string;
-  retailSaleStatus: string | null;
-  retailSoldAt: string | null;
-  chipSerial: string | null;
-  programId: string | null;
-  program: { id: string; name: string; currency: string; programType: string } | null;
-  batchId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  vaultEntry: { id: string; panLast4: string; panBin: string; cardholderName: string | null } | null;
-  credentials: { id: string; kind: string; deviceName: string | null; createdAt: string; lastUsedAt: string | null }[];
-  activationSessions: {
-    id: string;
-    expiresAt: string;
-    consumedAt: string | null;
-    consumedDeviceLabel: string | null;
-    createdAt: string;
-  }[];
-}
-
 export interface ListAuditRow {
   id: string;
   eventType: string;
@@ -233,11 +210,6 @@ export function createVaultClient(baseUrl: string, auth: VaultClientOptions) {
     /** Forward a request through the vault proxy (PAN substitution). */
     async proxy(input: ProxyInput): Promise<ProxyResult> {
       return vaultPost<ProxyResult>(baseUrl, '/api/vault/proxy', input, auth);
-    },
-
-    /** Admin read: full card list with vault + credential + activation state. */
-    async listCards(): Promise<ListCardRow[]> {
-      return vaultGet<ListCardRow[]>(baseUrl, '/api/vault/cards', auth);
     },
 
     /** Admin read: vault audit log tail. */

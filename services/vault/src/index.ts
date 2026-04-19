@@ -10,7 +10,6 @@ import registerRouter from './routes/register.routes.js';
 import tokensRouter from './routes/tokens.routes.js';
 import proxyRouter from './routes/proxy.routes.js';
 import auditRouter from './routes/audit.routes.js';
-import cardsRouter from './routes/cards.routes.js';
 
 const config = getVaultConfig();
 const app = express();
@@ -39,7 +38,6 @@ vaultRouter.use(registerRouter);
 vaultRouter.use(tokensRouter);
 vaultRouter.use(proxyRouter);
 vaultRouter.use(auditRouter);
-vaultRouter.use(cardsRouter);
 app.use('/api/vault', vaultRouter);
 
 app.use(errorMiddleware);

@@ -27,14 +27,6 @@ export async function purgeExpiredRegistrationChallenges(now: Date): Promise<num
   return count;
 }
 
-export async function purgeExpiredActivationSessions(now: Date): Promise<number> {
-  // Consumed sessions are kept as the per-card activation audit trail.
-  const { count } = await prisma.activationSession.deleteMany({
-    where: { expiresAt: { lt: now }, consumedAt: null },
-  });
-  return count;
-}
-
 /** Bypasses the per-row state-machine assertion deliberately: the where-clause
  *  pins the source state to PENDING (a legal origin for EXPIRED), and a
  *  per-row update would race the in-flight auth path. */

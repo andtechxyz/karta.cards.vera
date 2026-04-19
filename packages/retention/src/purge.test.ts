@@ -4,7 +4,6 @@ vi.mock('@vera/db', () => ({
   prisma: {
     retrievalToken: { deleteMany: vi.fn() },
     registrationChallenge: { deleteMany: vi.fn() },
-    activationSession: { deleteMany: vi.fn() },
     transaction: { updateMany: vi.fn() },
   },
   TransactionStatus: { PENDING: 'PENDING', EXPIRED: 'EXPIRED' },
@@ -14,7 +13,6 @@ import { prisma, TransactionStatus } from '@vera/db';
 import {
   purgeExpiredRetrievalTokens,
   purgeExpiredRegistrationChallenges,
-  purgeExpiredActivationSessions,
   expirePendingTransactions,
 } from './purge.js';
 
@@ -26,10 +24,6 @@ const mock = {
     prisma.registrationChallenge.deleteMany as unknown as Mocked<
       typeof prisma.registrationChallenge.deleteMany
     >,
-  activationSessionDelete: () =>
-    prisma.activationSession.deleteMany as unknown as Mocked<
-      typeof prisma.activationSession.deleteMany
-    >,
   transactionUpdate: () =>
     prisma.transaction.updateMany as unknown as Mocked<typeof prisma.transaction.updateMany>,
 };
@@ -39,7 +33,6 @@ const NOW = new Date('2026-04-16T12:00:00Z');
 beforeEach(() => {
   mock.retrievalTokenDelete().mockReset().mockResolvedValue({ count: 0 } as never);
   mock.registrationChallengeDelete().mockReset().mockResolvedValue({ count: 0 } as never);
-  mock.activationSessionDelete().mockReset().mockResolvedValue({ count: 0 } as never);
   mock.transactionUpdate().mockReset().mockResolvedValue({ count: 0 } as never);
 });
 
@@ -65,19 +58,6 @@ describe('purgeExpiredRegistrationChallenges', () => {
     expect(count).toBe(3);
     expect(mock.registrationChallengeDelete()).toHaveBeenCalledWith({
       where: { expiresAt: { lt: NOW } },
-    });
-  });
-});
-
-describe('purgeExpiredActivationSessions', () => {
-  it('deletes only unconsumed expired sessions (audit trail for consumed ones is retained)', async () => {
-    mock.activationSessionDelete().mockResolvedValue({ count: 2 } as never);
-
-    const count = await purgeExpiredActivationSessions(NOW);
-
-    expect(count).toBe(2);
-    expect(mock.activationSessionDelete()).toHaveBeenCalledWith({
-      where: { expiresAt: { lt: NOW }, consumedAt: null },
     });
   });
 });

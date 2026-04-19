@@ -7,7 +7,7 @@ export type {
   DecryptedCard,
 } from './types.js';
 
-export { storeCard, listCards, getCardMetadata } from './store.service.js';
+export { storeCard, getCardMetadata } from './store.service.js';
 export { mintRetrievalToken, consumeRetrievalToken } from './retrieval.service.js';
 export type { ConsumeContext, ConsumeResult } from './retrieval.service.js';
 export { forwardViaVault } from './proxy.service.js';

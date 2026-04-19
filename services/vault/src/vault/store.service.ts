@@ -113,22 +113,6 @@ export async function storeCard(input: StoreInput): Promise<StoreResult> {
   return { vaultEntryId: row.id, panLast4, deduped: false };
 }
 
-export async function listCards(): Promise<CardMetadata[]> {
-  const rows = await prisma.vaultEntry.findMany({
-    orderBy: { createdAt: 'desc' },
-    select: {
-      id: true,
-      panLast4: true,
-      panBin: true,
-      panExpiryMonth: true,
-      panExpiryYear: true,
-      cardholderName: true,
-      createdAt: true,
-    },
-  });
-  return rows;
-}
-
 export async function getCardMetadata(vaultEntryId: string): Promise<CardMetadata | null> {
   return prisma.vaultEntry.findUnique({
     where: { id: vaultEntryId },

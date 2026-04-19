@@ -59,11 +59,6 @@ const auditQuerySchema = z.object({
   offset: z.coerce.number().int().nonnegative().default(0),
 });
 
-router.get('/cards', async (_req, res) => {
-  const cards = await callVault(() => getVault().listCards());
-  res.json(cards);
-});
-
 router.get('/audit', async (req, res) => {
   const { limit, offset } = auditQuerySchema.parse(req.query);
   const rows = await callVault(() => getVault().listAudit({ limit, offset }));
