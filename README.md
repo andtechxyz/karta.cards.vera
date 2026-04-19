@@ -57,7 +57,7 @@ docker compose up -d
 npm install
 cp .env.example .env
 #   generate keys and paste them in:
-#     VAULT_KEY_V1, VAULT_FINGERPRINT_KEY, VERA_ROOT_ARQC_SEED
+#     VAULT_PAN_DEK_V1, VAULT_PAN_FINGERPRINT_KEY, VERA_ROOT_ARQC_SEED
 #     SERVICE_AUTH_PAY_SECRET, SERVICE_AUTH_ADMIN_SECRET
 #     ADMIN_API_KEY
 #     SERVICE_AUTH_KEYS JSON (match pay / admin / palisade entries)
@@ -72,9 +72,9 @@ Default ports:
 |---|---|---|
 | pay (backend) | 3003 | Transactions, auth, orchestration, SSE |
 | vault (backend) | 3004 | Tokenise, retrieval tokens, audit, proxy |
-| admin (backend) | 3005 | Programs CRUD, admin vault proxy |
+| admin (backend) | 3005 | Tokenisation-program CRUD, admin vault + pay proxies |
 | pay (frontend) | 5175 | MerchantCheckout + CustomerPayment |
-| admin (frontend) | 5176 | Admin dashboard |
+| admin (frontend) | 5176 | Dual-backend SPA (talks to Vera admin on 3005, Palisade admin on 3009 via `/palisade-api/*`) |
 
 `PAYMENT_PROVIDER=mock` is the default — the system runs end-to-end
 without any Stripe keys. Flip to `stripe` + test keys when you want to
@@ -125,11 +125,20 @@ Vera-only.
 ## Tier rules
 
 Tier rules are authoritative at `POST /api/transactions` creation time
-— the server computes `allowedCredentialKinds` from the card's program
-(or `DEFAULT_TIER_RULES` if unlinked) and stores it on the Transaction.
-Today that ruleset still lives in `@vera/programs`; a follow-up will
-change this surface so Palisade pushes tier rules into Vera at txn-create
-time rather than Vera owning the Program row.
+— the server computes `allowedCredentialKinds` from the card's
+`TokenisationProgram` (or `DEFAULT_TIER_RULES` if unlinked) and stores
+it on the Transaction. Since Phase 4c (commit `bda0e55`), the ruleset
+lives on Vera's new `TokenisationProgram` model (id matches Palisade
+`Program.id` by convention; there is no cross-DB FK because the two
+services run on separate Postgres instances). Admin operators write
+rules via `POST/GET/PATCH /api/admin/tokenisation-programs` on Vera
+admin; the same dual-backend SPA exposes this alongside Palisade's
+card-domain tabs.
+
+The tier-rule resolver is `@vera/programs` —
+`resolveRulesFromTokenisationProgram(program)`. Palisade keeps its own
+`@palisade/card-programs` package, but that package is now
+program-type classification only; the tier-rule half moved here.
 
 ## Tests
 
@@ -152,13 +161,14 @@ Coverage:
 
 ## Useful paths
 
-- Plan: `/Users/danderson/.claude/plans/tingly-imagining-sketch.md`
 - Memory: `/Users/danderson/.claude/projects/-Users-danderson-Vera/memory/`
+- Split runbook: `docs/SESSION-HANDOFF-2026-04-19.md`
 - Schema: `packages/db/prisma/schema.prisma`
 - Orchestration entry point: `services/pay/src/orchestration/post-auth.ts`
-- Tiering: `services/pay/src/transactions/tier.ts`
+- Tiering: `services/pay/src/transactions/tier.ts` (reads from `TokenisationProgram`)
+- TokenisationProgram admin: `services/admin/src/routes/tokenisation-programs.routes.ts`
 - WebAuthn config: `packages/webauthn/src/config.ts` (CTAP1-verbatim)
-- Vault client: `packages/vault-client/src/index.ts`
+- Vault client (HMAC to Vera vault; Palisade ships its own fork): `packages/vault-client/src/index.ts`
 - Service auth: `packages/service-auth/src/index.ts`
 - Admin auth gate: `services/admin/src/middleware/require-admin-key.ts`
 - Retention sweeps: `packages/retention/src/`

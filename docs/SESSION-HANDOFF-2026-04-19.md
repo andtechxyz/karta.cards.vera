@@ -1,5 +1,57 @@
 # Session handoff — 2026-04-19 (mid-flight, airplane stop)
 
+> **RESOLVED 2026-04-19 (post-airplane).** The body below remains as historical
+> record of where the session paused. Everything it listed as pending has
+> since landed on `main` in both repos.
+>
+> **Summary of what shipped after the airplane stop:**
+>
+> - **Port from Vera → Palisade (Ports 4a–9):** ran end-to-end via the
+>   continuation agent. `port/from-vera-cardchip-20260419-104759` merged
+>   into Palisade's `sdm-udk-cutover` (`7cbed79` / `cc7267f`), which then
+>   merged into `main` as `030e0e4`. Card-ops base service, Track-1 per-FI
+>   GP keys + APDU audit log, IAD CVR/DAC/IDN (`b973e9c`), reaper script
+>   (`878063c`), `@palisade/metrics` (`a52847c`), runbooks (`7967c0f`),
+>   seed script for 545490 Pty Ltd + Karta USA Inc (`7065f5b`, ARN fix
+>   `446ebbe`), and issuer + chip-profile admin CRUD (`e5430b3`) all
+>   landed via that branch chain.
+> - **Phase 4d (admin SPA dual-backend):** Vera side `255887a`; Palisade
+>   side `b0dd850` (`/palisade-api` rewrite + capabilities parity), both
+>   shipping in their respective `phase-5-infra` / strip merges.
+> - **Phase 5 (per-repo infra + CI):** Vera Dockerfile strip `6ff0c81`;
+>   Vera `aws-setup.sh` strip `5f23ec6`; Vera deploy workflow strip
+>   `fa14e5a`. Palisade Dockerfile + sftp + aws-setup.sh + admin port
+>   3009 `7c1a60d`; Palisade deploy workflow `a9105bb`; merged to Palisade
+>   main as `ae465a0`.
+> - **Agent A (install + personalise payment applet):** `70d22be` install
+>   op, `027516c` personalise op, `99343dc` schema field
+>   `ChipProfile.paymentAppletCapFilename`, `cf73dee` lockfile refresh,
+>   all merged as `f9236e6`.
+> - **Agent B (IssuerProfile bankId + progId + postProvisionUrl):**
+>   backend `42e62aa` (Palisade), admin SPA form fields `4f1e80b` (Vera),
+>   SPA migration-debt fix `d63aea7` (Vera), merged as `dcedae8`
+>   (Palisade) + `59e4893` (Vera).
+> - **Vera strip landed to main:** `31d80dc` merged
+>   `worktree-separate-vera-palisade` to Vera `main`; `6cfad95` completed
+>   the strip by removing card-domain files that drifted in on `main`
+>   after the worktree forked; `a5e47cc` removed stranded card-domain
+>   backend routes.
+> - **Stashes:** all `AIRPLANE_STASH` / `OTHER_SESSION_WIP_*` entries on
+>   Palisade have been absorbed into the port branch or reconciled — see
+>   `git stash list` for remaining residue (one unrelated
+>   `OTHER_SESSION_WIP` on `sdm-udk-cutover` and one
+>   `phase3-vera-shrink-baseline` baseline stash on Vera's `main`).
+> - **Phase 3 Vera schema shrink:** still deferred. Baseline captured in
+>   stash entry `phase3-vera-shrink-baseline`; the shrink itself waits
+>   until pay's cross-repo card-lookup call pattern is decided.
+>
+> Current heads: Vera `a5e47cc` (main), Palisade `dcedae8` (main).
+>
+> Active external gates (still pending, not blocking the repo split):
+> APC key ceremony ARNs, CPI GP SCP03 master ARNs, NXP M/Chip + VSDC CAPs
+> to land in `services/card-ops/cap-files/`, and mobile pickup of
+> `?mode=plan` for Android NFC plan-mode testing.
+
 Paused mid-port due to internet-loss window. Everything is committed or stashed; nothing on a loose working tree.
 
 ## State of each repo
