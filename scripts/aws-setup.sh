@@ -3,8 +3,15 @@
 # Vera AWS infrastructure setup
 #
 # Idempotent: safe to re-run.  Creates or updates secrets, task definitions,
-# target groups, ALB listener rules, and ECS services for all five Vera
-# micro-services (tap, activation, pay, vault, admin).
+# target groups, ALB listener rules, and ECS services.
+#
+# STALE — pending Phase 5 rewrite.  Post-split Vera runs only pay, vault,
+# admin; the card-domain services (tap, activation, data-prep, rca,
+# batch-processor, sftp) moved to Palisade and need to be deleted from here.
+# Palisade will grow its own aws-setup.sh on the Palisade side.  Until that
+# rewrite lands, re-running this script will re-create ECS task definitions
+# for services that no longer exist in the Vera repo — it won't fail, but
+# it will point ECS at images that the build pipeline no longer produces.
 #
 # Prerequisites:
 #   - AWS CLI v2 configured with credentials that can manage ECS, ELB, Secrets

@@ -4,8 +4,9 @@
 # Build:  docker build --build-arg SERVICE=pay -t vera-pay .
 # Run:    docker run -p 3003:3003 --env-file .env vera-pay
 #
-# SERVICE must be one of:
-#   tap, activation, pay, vault, admin, data-prep, rca, batch-processor
+# SERVICE must be one of: pay, vault, admin
+# (Card-domain services — tap, activation, data-prep, rca, batch-processor,
+# sftp — moved to Palisade in the split.)
 # ---------------------------------------------------------------------------
 
 # --- Stage 1: install + compile everything -----------------------------------
@@ -29,18 +30,10 @@ COPY packages/vault-client/package.json      packages/vault-client/
 COPY packages/programs/package.json          packages/programs/
 COPY packages/service-auth/package.json      packages/service-auth/
 COPY packages/retention/package.json         packages/retention/
-COPY packages/emv/package.json              packages/emv/
-COPY packages/provisioning-client/package.json packages/provisioning-client/
 COPY packages/cognito-auth/package.json     packages/cognito-auth/
-COPY services/tap/package.json               services/tap/
-COPY services/activation/package.json        services/activation/
 COPY services/pay/package.json               services/pay/
 COPY services/vault/package.json             services/vault/
 COPY services/admin/package.json             services/admin/
-COPY services/data-prep/package.json        services/data-prep/
-COPY services/rca/package.json              services/rca/
-COPY services/batch-processor/package.json  services/batch-processor/
-COPY services/activation/frontend/package.json services/activation/frontend/
 COPY services/pay/frontend/package.json      services/pay/frontend/
 COPY services/admin/frontend/package.json    services/admin/frontend/
 
@@ -100,10 +93,6 @@ COPY --from=builder /app/packages/service-auth/dist/   packages/service-auth/dis
 COPY --from=builder /app/packages/service-auth/package.json packages/service-auth/
 COPY --from=builder /app/packages/retention/dist/      packages/retention/dist/
 COPY --from=builder /app/packages/retention/package.json packages/retention/
-COPY --from=builder /app/packages/emv/dist/            packages/emv/dist/
-COPY --from=builder /app/packages/emv/package.json     packages/emv/
-COPY --from=builder /app/packages/provisioning-client/dist/ packages/provisioning-client/dist/
-COPY --from=builder /app/packages/provisioning-client/package.json packages/provisioning-client/
 COPY --from=builder /app/packages/cognito-auth/dist/   packages/cognito-auth/dist/
 COPY --from=builder /app/packages/cognito-auth/package.json packages/cognito-auth/
 
@@ -112,7 +101,7 @@ ARG SERVICE
 COPY --from=builder /app/services/${SERVICE}/dist/          services/${SERVICE}/dist/
 COPY --from=builder /app/services/${SERVICE}/package.json   services/${SERVICE}/
 
-# Copy built frontend (may be empty for tap/vault — builder ensures dir exists)
+# Copy built frontend (may be empty for vault — builder ensures dir exists)
 COPY --from=builder /app/services/${SERVICE}/frontend/dist/ services/${SERVICE}/frontend/dist/
 
 # Copy scripts/ so one-off tasks (seed, regen-sad-e2e, etc.) can run via
