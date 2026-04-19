@@ -74,6 +74,8 @@ jobs:
             port: 3007
           - service: batch-processor
             port: 3008
+          - service: card-ops
+            port: 3009
           - service: sftp
             port: 22
             dockerfile: services/sftp/Dockerfile
