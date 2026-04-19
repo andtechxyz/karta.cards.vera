@@ -216,12 +216,12 @@ export function IssuerProfileDetail({
         body[k] = k === 'cvn' ? Number(v) : v;
       }
       if (isNew) {
-        await api.post('/issuer-profiles', body);
+        await api.palisade.post('/issuer-profiles', body);
       } else {
         // PATCH must not include programId (the backend omits it from
         // the patch schema — a migration would need to land first).
         delete body.programId;
-        await api.patch(`/issuer-profiles/${(profile as IssuerProfile).id}`, body);
+        await api.palisade.patch(`/issuer-profiles/${(profile as IssuerProfile).id}`, body);
       }
       onSaved();
     } catch (e) {
