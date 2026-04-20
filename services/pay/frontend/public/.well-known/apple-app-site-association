@@ -3,11 +3,20 @@
     "apps": [],
     "details": [
       {
-        "appIDs": ["39L78JXRV9.com.mobile.karta.cards"],
+        "appIDs": [
+          "39GT4WXF5C.cards.karta.palisade",
+          "39GT4WXF5C.com.mobile.karta.cards"
+        ],
         "components": [
           { "/": "/pay/*" }
         ]
       }
+    ]
+  },
+  "webcredentials": {
+    "apps": [
+      "39GT4WXF5C.cards.karta.palisade",
+      "39GT4WXF5C.com.mobile.karta.cards"
     ]
   }
 }
