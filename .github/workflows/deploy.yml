@@ -57,28 +57,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Post-split: Vera owns vault + pay + admin-lite only.  All
+        # card-domain services (tap, activation, rca, data-prep,
+        # batch-processor, sftp, card-ops) live on the Palisade repo at
+        # github.com/andtechxyz/karta.cards.palisade and deploy from
+        # there via their own workflow.  Same AWS account + cluster +
+        # ECR registry — just a different git origin.
         include:
-          - service: tap
-            port: 3001
-          - service: activation
-            port: 3002
           - service: pay
             port: 3003
           - service: vault
             port: 3004
           - service: admin
             port: 3005
-          - service: data-prep
-            port: 3006
-          - service: rca
-            port: 3007
-          - service: batch-processor
-            port: 3008
-          - service: card-ops
-            port: 3009
-          - service: sftp
-            port: 22
-            dockerfile: services/sftp/Dockerfile
 
     env:
       IMAGE_TAG: ${{ github.sha }}
