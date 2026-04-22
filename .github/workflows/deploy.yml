@@ -1,16 +1,12 @@
 # Vera CI/CD — build, test, and deploy all services to AWS ECS.
 #
-# Required GitHub Secrets:
-#   AWS_ACCESS_KEY_ID      — IAM access key with permissions for ECR push and ECS deploy
-#   AWS_SECRET_ACCESS_KEY  — Corresponding IAM secret key
-#
-# The IAM user needs these policies:
-#   - ecr:GetAuthorizationToken, ecr:BatchCheckLayerAvailability, ecr:PutImage,
-#     ecr:InitiateLayerUpload, ecr:UploadLayerPart, ecr:CompleteLayerUpload,
-#     ecr:BatchGetImage, ecr:GetDownloadUrlForLayer
-#   - ecs:UpdateService, ecs:DescribeServices, ecs:DescribeTaskDefinition,
-#     ecs:RegisterTaskDefinition
-#   - iam:PassRole (for the ECS task execution role)
+# AWS auth: GitHub OIDC → assume IAM role gha-oidc-deploy.  No
+# long-lived access keys in repo secrets (Stage H.4 / PCI DSS 8.3).
+# The role's trust policy restricts assumption to:
+#   repo:andtechxyz/karta.cards.palisade:*
+#   repo:andtechxyz/karta.cards.vera:*
+# Both repos share the role + inline policy (ecr push / ecs deploy /
+# iam:PassRole on task roles); rotation = update one IAM resource.
 #
 # Cost-optimisations applied (mirrors Palisade):
 #   - `paths-ignore` skips on docs / config / applet-only commits
@@ -44,6 +40,9 @@ env:
 
 permissions:
   contents: read
+  # OIDC — configure-aws-credentials@v4 exchanges the GitHub-minted
+  # JWT for a short-lived IAM role session.  sts:AssumeRoleWithWebIdentity.
+  id-token: write
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -98,11 +97,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
+        # Stage H.4 — short-lived creds via GitHub OIDC.  Role +
+        # trust policy in AWS IAM account 600743178530; see Palisade
+        # commit history for provisioning or scripts/aws-setup.sh.
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::600743178530:role/gha-oidc-deploy
+          role-session-name: gha-vera-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Log in to Amazon ECR
