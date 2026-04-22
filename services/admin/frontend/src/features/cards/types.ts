@@ -16,7 +16,10 @@ export interface Card {
   retailSoldAt: string | null;
   chipSerial: string | null;
   programId: string | null;
-  program: { id: string; name: string; currency: string; programType?: string } | null;
+  // currency is optional pending a Palisade Program.currency schema
+  // addition (the GET /api/cards endpoint omits it today; UI cells
+  // that render currency must guard for undefined).
+  program: { id: string; name: string; currency?: string; programType?: string } | null;
   batchId: string | null;
   createdAt: string;
   vaultEntry?: { id: string; panLast4: string; panBin: string; cardholderName: string } | null;
