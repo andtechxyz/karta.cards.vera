@@ -1,10 +1,22 @@
 import { useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
-import { api, setRefreshToken } from '../utils/api';
+import { startAuthentication } from '@simplewebauthn/browser';
+import { api, setAccessToken, setRefreshToken } from '../utils/api';
 
-// Cognito login flow — handles USER_PASSWORD_AUTH plus the NEW_PASSWORD,
-// MFA_SETUP (TOTP via QR), and SOFTWARE_TOKEN_MFA challenges.  The `onAuth`
-// callback runs with the ID token once the full ceremony completes.
+// Cognito login flow — supports:
+//   - USER_PASSWORD_AUTH + NEW_PASSWORD/MFA_SETUP/SOFTWARE_TOKEN_MFA
+//     (the legacy path, retained as a fallback and for first-time
+//     password setup / TOTP provisioning)
+//   - USER_AUTH + WEB_AUTHN challenge (Cognito passkey auth, added
+//     Dec 2024; requires pool Tier=PLUS + WebAuthnConfiguration set
+//     server-side).  PCI DSS 8.5.1-compliant with UserVerification
+//     = required on the pool config — satisfies 2-factor in a
+//     single ceremony (have = FIDO2 authenticator; know/are = UV).
+//
+// Passkey registration happens via a separate component after a
+// user has authenticated via password+TOTP once (access token
+// required for StartWebAuthnRegistration).  See
+// ../features/profile/EnrolPasskey.tsx.
 
 const COGNITO_REGION = 'ap-southeast-2';
 const COGNITO_CLIENT_ID = '7pj9230obhsa6h6vrvk9tru7do';
@@ -24,19 +36,27 @@ async function cognitoAuth(action: string, params: Record<string, unknown>) {
   return data;
 }
 
+type Phase =
+  | 'credentials'
+  | 'new_password'
+  | 'mfa_setup'
+  | 'mfa_verify'
+  | 'passkey_pending';
+
 export function Login({ onAuth }: { onAuth: (idToken: string) => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
-  const [phase, setPhase] = useState<'credentials' | 'new_password' | 'mfa_setup' | 'mfa_verify'>('credentials');
+  const [phase, setPhase] = useState<Phase>('credentials');
   const [session, setSession] = useState('');
   const [mfaSecret, setMfaSecret] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const finish = (idToken: string, refreshToken?: string) => {
+  const finish = (idToken: string, refreshToken?: string, accessToken?: string) => {
     if (refreshToken) setRefreshToken(refreshToken);
+    if (accessToken) setAccessToken(accessToken);
     api.setAuthToken(idToken);
     onAuth(idToken);
   };
@@ -63,10 +83,90 @@ export function Login({ onAuth }: { onAuth: (idToken: string) => void }) {
         setSession(result.Session);
         setPhase('mfa_verify');
       } else if (result.AuthenticationResult) {
-        finish(result.AuthenticationResult.IdToken, result.AuthenticationResult.RefreshToken);
+        finish(result.AuthenticationResult.IdToken, result.AuthenticationResult.RefreshToken, result.AuthenticationResult.AccessToken);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Passkey (WebAuthn) first-factor sign-in.  One-round flow:
+  //   1. InitiateAuth USER_AUTH + PREFERRED_CHALLENGE=WEB_AUTHN
+  //      → server returns ChallengeName=WEB_AUTHN, ChallengeParameters
+  //        containing CREDENTIAL_REQUEST_OPTIONS (JSON)
+  //   2. navigator.credentials.get() via @simplewebauthn/browser
+  //      (startAuthentication handles the base64url↔ArrayBuffer
+  //      translation + origin binding — UserVerification=required
+  //      on the pool config forces PIN/biometric gate = 2nd factor).
+  //   3. RespondToAuthChallenge with the assertion
+  //      → AuthenticationResult.IdToken / RefreshToken
+  //
+  // Failure modes worth explicit messaging:
+  //   - UserNotFoundException → "unknown user"
+  //   - No passkey registered → Cognito returns error; fall back to
+  //     password flow.  We surface the raw Cognito error so the user
+  //     knows to register a passkey via password-login first.
+  //   - User cancels the browser prompt → AbortError from
+  //     navigator.credentials.get.
+  const handlePasskeyLogin = async () => {
+    setError('');
+    if (!email) {
+      setError('Enter your email first, then click "Sign in with passkey".');
+      return;
+    }
+    setLoading(true);
+    setPhase('passkey_pending');
+    try {
+      const result = await cognitoAuth('InitiateAuth', {
+        AuthFlow: 'USER_AUTH',
+        ClientId: COGNITO_CLIENT_ID,
+        AuthParameters: {
+          USERNAME: email,
+          PREFERRED_CHALLENGE: 'WEB_AUTHN',
+        },
+      });
+      if (result.ChallengeName !== 'WEB_AUTHN') {
+        throw new Error(
+          `Expected WEB_AUTHN challenge, got ${result.ChallengeName || '<none>'}`,
+        );
+      }
+      const reqOptions = JSON.parse(
+        result.ChallengeParameters.CREDENTIAL_REQUEST_OPTIONS as string,
+      );
+      // startAuthentication calls navigator.credentials.get() with
+      // the server-provided challenge + allowCredentials + rpId.
+      // Throws AbortError if the user cancels; we rethrow as a
+      // friendly message.
+      const assertion = await startAuthentication(reqOptions);
+      const challengeResp = await cognitoAuth('RespondToAuthChallenge', {
+        ClientId: COGNITO_CLIENT_ID,
+        ChallengeName: 'WEB_AUTHN',
+        Session: result.Session,
+        ChallengeResponses: {
+          USERNAME: email,
+          CREDENTIAL: JSON.stringify(assertion),
+        },
+      });
+      if (challengeResp.AuthenticationResult) {
+        finish(
+          challengeResp.AuthenticationResult.IdToken,
+          challengeResp.AuthenticationResult.RefreshToken,
+          challengeResp.AuthenticationResult.AccessToken,
+        );
+      } else {
+        throw new Error(
+          `Unexpected post-passkey response: ${challengeResp.ChallengeName || 'no tokens'}`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setError('Passkey sign-in cancelled.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Passkey sign-in failed');
+      }
+      setPhase('credentials');
     } finally {
       setLoading(false);
     }
@@ -91,7 +191,7 @@ export function Login({ onAuth }: { onAuth: (idToken: string) => void }) {
         setSession(result.Session);
         setPhase('mfa_verify');
       } else if (result.AuthenticationResult) {
-        finish(result.AuthenticationResult.IdToken, result.AuthenticationResult.RefreshToken);
+        finish(result.AuthenticationResult.IdToken, result.AuthenticationResult.RefreshToken, result.AuthenticationResult.AccessToken);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Password change failed');
@@ -117,7 +217,7 @@ export function Login({ onAuth }: { onAuth: (idToken: string) => void }) {
           ChallengeResponses: { USERNAME: email },
         });
         if (authResult.AuthenticationResult) {
-          finish(authResult.AuthenticationResult.IdToken, authResult.AuthenticationResult.RefreshToken);
+          finish(authResult.AuthenticationResult.IdToken, authResult.AuthenticationResult.RefreshToken, authResult.AuthenticationResult.AccessToken);
           return;
         }
       }
@@ -142,7 +242,7 @@ export function Login({ onAuth }: { onAuth: (idToken: string) => void }) {
         ChallengeResponses: { USERNAME: email, SOFTWARE_TOKEN_MFA_CODE: mfaCode },
       });
       if (result.AuthenticationResult) {
-        finish(result.AuthenticationResult.IdToken, result.AuthenticationResult.RefreshToken);
+        finish(result.AuthenticationResult.IdToken, result.AuthenticationResult.RefreshToken, result.AuthenticationResult.AccessToken);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'MFA verification failed');
@@ -161,9 +261,34 @@ export function Login({ onAuth }: { onAuth: (idToken: string) => void }) {
             <p className="small">Sign in with your Cognito credentials</p>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" style={{ width: '100%', marginBottom: 8, padding: 8 }} />
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" style={{ width: '100%', marginBottom: 8, padding: 8 }} onKeyDown={(e) => e.key === 'Enter' && handleLogin()} />
-            <button className="btn primary" onClick={handleLogin} disabled={loading} style={{ width: '100%' }}>
+            <button className="btn primary" onClick={handleLogin} disabled={loading} style={{ width: '100%', marginBottom: 8 }}>
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
+            <div style={{ textAlign: 'center', margin: '8px 0', color: '#888', fontSize: 12 }}>— or —</div>
+            <button
+              className="btn"
+              onClick={handlePasskeyLogin}
+              disabled={loading || !email}
+              style={{ width: '100%' }}
+              title={!email ? 'Enter your email above first' : 'Uses a registered passkey; password not required'}
+            >
+              🔑 Sign in with passkey
+            </button>
+            <p className="small" style={{ marginTop: 8, color: '#666', fontSize: 11 }}>
+              Passkeys register after your first password+MFA login via the
+              profile menu.  Your FIDO2 card works over NFC on Android Chrome.
+            </p>
+          </>
+        )}
+
+        {phase === 'passkey_pending' && (
+          <>
+            <p className="small">Waiting for your authenticator…</p>
+            <p style={{ fontSize: 14, color: '#666' }}>
+              Follow the prompt on your device. This usually means touching a
+              security key, tapping your card to the phone, or confirming with
+              Touch ID / Windows Hello.
+            </p>
           </>
         )}
 

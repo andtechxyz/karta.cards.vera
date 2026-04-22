@@ -14,6 +14,11 @@
 
 const ID_TOKEN_STORAGE = 'vera.adminIdToken';
 const REFRESH_TOKEN_STORAGE = 'vera.adminRefreshToken';
+// Access token is needed for direct Cognito calls (StartWebAuthn
+// Registration / CompleteWebAuthnRegistration).  Backend APIs use
+// the id token (Authorization header set by `api`); access token is
+// only used for self-management Cognito ops from the admin SPA.
+const ACCESS_TOKEN_STORAGE = 'vera.adminAccessToken';
 
 const VERA_BASE: string =
   (import.meta.env.VITE_VERA_BASE_URL as string | undefined) ?? '/api';
@@ -31,6 +36,7 @@ export function setAuthToken(token: string): void {
 export function clearAuthToken(): void {
   localStorage.removeItem(ID_TOKEN_STORAGE);
   localStorage.removeItem(REFRESH_TOKEN_STORAGE);
+  localStorage.removeItem(ACCESS_TOKEN_STORAGE);
 }
 
 export function getRefreshToken(): string | null {
@@ -39,6 +45,14 @@ export function getRefreshToken(): string | null {
 
 export function setRefreshToken(token: string): void {
   localStorage.setItem(REFRESH_TOKEN_STORAGE, token);
+}
+
+export function getAccessToken(): string | null {
+  return localStorage.getItem(ACCESS_TOKEN_STORAGE);
+}
+
+export function setAccessToken(token: string): void {
+  localStorage.setItem(ACCESS_TOKEN_STORAGE, token);
 }
 
 /**

@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   clearAuthToken,
   fetchCapabilities,
+  getAccessToken,
   getAuthToken,
   errorMsg,
   type Capabilities,
 } from '../utils/api';
 import { Login } from '../auth/Login';
 import { TabGroup, type PrimaryTab, type SecondaryTab } from '../components/TabGroup';
+import { EnrolPasskey } from '../features/profile/EnrolPasskey';
 
 import { FinancialInstitutionsPage } from '../features/financial-institutions/Page';
 import { ProgramsPage } from '../features/programs/Page';
@@ -123,6 +125,7 @@ export default function Admin() {
   const [capsErr, setCapsErr] = useState<string | null>(null);
   const [primary, setPrimary] = useState<string>('');
   const [secondary, setSecondary] = useState<string>('');
+  const [showEnrolPasskey, setShowEnrolPasskey] = useState(false);
 
   useEffect(() => {
     fetchCapabilities()
@@ -175,6 +178,14 @@ export default function Admin() {
         <h1 style={{ margin: 0 }}>karta.cards Admin</h1>
         <button
           className="btn ghost"
+          onClick={() => setShowEnrolPasskey(true)}
+          title="Register a passkey for passwordless sign-in next time"
+          disabled={!getAccessToken()}
+        >
+          🔑 Passkey
+        </button>
+        <button
+          className="btn ghost"
           onClick={() => {
             clearAuthToken();
             setAuthToken('');
@@ -183,6 +194,27 @@ export default function Admin() {
           Logout
         </button>
       </div>
+      {showEnrolPasskey && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 100,
+          }}
+          onClick={() => setShowEnrolPasskey(false)}
+        >
+          <div onClick={(e) => e.stopPropagation()}>
+            <EnrolPasskey
+              accessToken={getAccessToken() ?? ''}
+              onClose={() => setShowEnrolPasskey(false)}
+            />
+          </div>
+        </div>
+      )}
       <p className="small">Cards, vault, WebAuthn credentials, transactions, audit.</p>
       <TabGroup
         tabs={tabs}
